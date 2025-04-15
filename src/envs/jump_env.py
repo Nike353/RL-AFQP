@@ -10,13 +10,13 @@ from isaacgym.torch_utils import to_torch
 import ml_collections
 import numpy as np
 import torch
-
+import ipdb
 from src.configs.defaults import sim_config
 from src.controllers import phase_gait_generator
 from src.controllers import qp_torque_optimizer
 from src.controllers import raibert_swing_leg_controller
 from src.envs import go1_rewards
-from src.robots import go1, go1_robot
+from src.robots import go1#, go1_robot
 from src.robots.motors import MotorControlMode
 
 
@@ -106,7 +106,8 @@ class JumpEnv:
     self._create_terrain()
     self._init_positions = self._compute_init_positions()
     if self._use_real_robot:
-      robot_class = go1_robot.Go1Robot
+      # robot_class = go1_robot.Go1Robot
+      pass
     else:
       robot_class = go1.Go1
     self._robot = robot_class(
@@ -335,7 +336,8 @@ class JumpEnv:
       self._swing_leg_controller.reset_idx(env_ids)
       self._gait_generator.reset_idx(env_ids)
       self._resample_command(env_ids)
-
+    print("self._obs_buf_inside_env")
+    print(self._obs_buf)
     return self._obs_buf, self._privileged_obs_buf
 
   def step(self, action: torch.Tensor):
@@ -546,9 +548,20 @@ class JumpEnv:
         dim=1)
     obs = torch.concatenate((distance_to_goal_local, phase_obs, robot_obs),
                             dim=1)
+    # print("distance_to_goal_local")
+    # print(distance_to_goal_local)
+    # print("phase_obs")
+    # print(phase_obs)
+    # print("robot_obs")
+    # print(robot_obs)
+    # print("obs")
+    # print(obs)
     if self._config.get("observation_noise",
                         None) is not None and (not self._use_real_robot):
       obs += torch.randn_like(obs) * self._config.observation_noise
+    # print("noisy_obs")
+    # print(obs)
+    # exit()
     return obs
 
   def get_observations(self):

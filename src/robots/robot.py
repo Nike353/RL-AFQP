@@ -207,6 +207,12 @@ class Robot:
                                 dtype=torch.float,
                                 device=self._device,
                                 requires_grad=False)
+    print("self._foot_positions")
+    print(self._foot_positions)
+    print("self._root_states")
+    print(self._root_states)
+    
+    
 
   def reset(self):
     self.reset_idx(torch.arange(self._num_envs, device=self._device))
@@ -274,6 +280,11 @@ class Robot:
                                                        13)[:,
                                                            self._feet_indices,
                                                            0:3]
+    print("self._foot_positions_after_post_physics_step")
+    print(self._foot_positions)
+    print("self._root_states_after_post_physics_step")
+    print(self._root_states)
+    exit()
 
   def render(self, sync_frame_time=True):
     if self._viewer:
@@ -374,6 +385,13 @@ class Robot:
     # num_env x 4 x 3
     foot_position = (foot_positions_world_frame -
                      base_position_world_frame[:, None, :])
+    print("foot_position_world_frame")
+    print(foot_positions_world_frame)
+    print("base_position_world_frame")
+    print(base_position_world_frame)
+    print("foot_position")
+    print(foot_position)
+    exit()
     return torch.matmul(self._base_rot_mat_t,
                         foot_position.transpose(1, 2)).transpose(1, 2)
 
@@ -434,12 +452,9 @@ class Robot:
     rot_mat_t = self.base_rot_mat_t
     jacobian = torch.zeros((self._num_envs, 12, 12), device=self._device)
     jacobian[:, :3, :3] = torch.bmm(rot_mat_t, self._jacobian[:, 4, :3, 6:9])
-    jacobian[:, 3:6, 3:6] = torch.bmm(rot_mat_t, self._jacobian[:, 8, :3,
-                                                                9:12])
-    jacobian[:, 6:9, 6:9] = torch.bmm(rot_mat_t, self._jacobian[:, 12, :3,
-                                                                12:15])
-    jacobian[:, 9:12, 9:12] = torch.bmm(rot_mat_t, self._jacobian[:, 16, :3,
-                                                                  15:18])
+    jacobian[:, 3:6, 3:6] = torch.bmm(rot_mat_t, self._jacobian[:, 8, :3, 9:12])
+    jacobian[:, 6:9, 6:9] = torch.bmm(rot_mat_t, self._jacobian[:, 12, :3, 12:15])
+    jacobian[:, 9:12, 9:12] = torch.bmm(rot_mat_t, self._jacobian[:, 16, :3, 15:18])
     return jacobian
 
   @property

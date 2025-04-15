@@ -15,7 +15,7 @@ The main contents of this repository include:
 First, make sure the environment is setup by following the steps in the [Setup](#Setup) section.
 
 ### Evaluating Policy
-
+/home/guanqihe/nikhil/S-25/ocrl/RL-AMPC
 We provide both the pronking and trotting policy, as well as their end-to-end counterparts, in `example_checkpoints`. You can check it out by running:
 ```bash
 python -m src.agents.ppo.eval --logdir=example_checkpoints/bound_cajun/ --num_envs=1 --use_gpu=False --show_gui=True --use_real_robot=False --save_traj=False
