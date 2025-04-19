@@ -7,7 +7,9 @@ from typing import Any, List
 import ml_collections
 import numpy as np
 import torch
-import mujoco, mujoco_viewer
+import mujoco
+import mujoco.viewer
+import xml.etree.ElementTree as ET
 from src.utilities.rotation_utils import  get_euler_xyz_from_quaternion_np, quat_to_rot_mat_np
 
 def angle_normalize(x):
@@ -50,7 +52,7 @@ class Robot:
   def _compute_base_init_state(self, init_positions: np.ndarray):
     """Computes desired init state for CoM (position and velocity)."""
     num_envs = init_positions.shape[0]
-    init_state_list = [0., 0., 0.] + [0., 0., 0., 1.] + [0., 0., 0.] + [0., 0., 0.]   #compos quat comvel angvel
+    init_state_list = [0., 0., 0.] + [1., 0., 0., 0.] + [0., 0., 0.] + [0., 0., 0.]   #compos quat comvel angvel
     # init_state_list = [0., 0., 0.] + [0., 0., 0.7071, 0.7071] + [0., 0., 0.
     #                                                      ] + [0., 0., 0.]
     # init_state_list = [0., 0., 0.] + [ 0.0499792, 0, 0, 0.9987503
@@ -70,11 +72,39 @@ class Robot:
     # print(self.data.qpos)
     
     
-    self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
-    default_qpos = np.array([0.0,0.0,0.27,1.0,0.0,0.0,0.0,0.0,0.9,-1.8,0.0,0.9,-1.8,0.0,0.9,-1.8,0.0,0.9,-1.8])
-    self.data.qpos = default_qpos.copy()
-    mujoco.mj_forward(self.model, self.data)
-    self.viewer.render()
+    # self.viewer = 
+    self.viewer = mujoco.viewer.launch_passive(self.model,self.data,
+                                               show_left_ui=False,
+                                               show_right_ui=False,
+                                               key_callback=self.viewer_key_callback)
+    
+     # visual markers
+    self.vis_markers = []
+    # manipulatable camera
+    self.free_camera = mujoco.MjvCamera()
+    # default_qpos = np.array([0.0,0.0,0.27,1.0,0.0,0.0,0.0,0.0,0.9,-1.8,0.0,0.9,-1.8,0.0,0.9,-1.8,0.0,0.9,-1.8])
+    # self.data.qpos = default_qpos.copy()
+    tree = ET.parse(xml_path)
+    self.viewer_paused = True
+    root = tree.getroot()
+    kf_element = root.find(".//key[@name='home']")
+    if kf_element is not None and 'qpos' in kf_element.attrib:
+        key_frame_str = kf_element.attrib['qpos']
+        key_frame_qpos = np.fromstring(key_frame_str, sep=' ')
+        
+        if key_frame_qpos.size != self.model.nq:
+            raise ValueError(
+                f"The extracted qpos has {key_frame_qpos.size} values, but expected {self.model.nq}."
+            )
+        
+        self.data.qpos[:] = key_frame_qpos
+        mujoco.mj_forward(self.model, self.data)
+    else:
+        self.data.qpos[:] = [0,0,0.27,1,0,0,0,0,0.9,-1.8,0,0.9,-1.8,0,0.9,-1.8,0,0.9,-1.8]
+        mujoco.mj_forward(self.model, self.data)
+        print("No keyframe element with attribute 'qpos' found; using default qpos values.")
+    self.viewer.sync()
+    print("hi")
     self._num_dof = self.model.nu
     self._num_bodies = self.model.nbody
     self._body_indices = []
@@ -96,8 +126,13 @@ class Robot:
         self._body_indices.append(i)
         self._body_names.append(body_name)
     
-    
-
+  ###viewer related functions  
+  def viewer_key_callback(self, keycode):
+    if chr(keycode) == ' ':
+            # print('space')
+            self.viewer_paused = not self.viewer_paused
+    elif chr(keycode) == 'E':
+            self.viewer.opt.frame = not self.viewer.opt.frame
   def _init_buffers(self):
     # get gym GPU state tensors
     
@@ -138,8 +173,8 @@ class Robot:
                                 )
     self._dof_state = np.zeros((1, self._num_dof, 2))
     self._get_jacobian()
-    print(self.data.xpos)
-    print(self.data.qpos)
+    # print(self.data.xpos)
+    # print(self.data.qpos)
     # exit()
   def _get_jacobian(self):
     self._jacobian = np.zeros((self.num_envs, self._num_bodies, 6, self.model.nv))
@@ -171,29 +206,41 @@ class Robot:
     self.data.qvel[6:] = self._motor_velocities[env_ids]
 
     
-    mujoco.mj_resetData(self.model,self.data)        
-
+    mujoco.mj_forward(self.model,self.data)   
+   
+    # print(self.data.cvel)
     self._post_physics_step()
+    
+  
+     
 
   def step(self, action):
-    for _ in range(self._sim_config.action_repeat):
-      self._torques, _ = self.motor_group.convert_to_torque(
-          action, self._motor_positions, self._motor_velocities)
-      self.data.ctrl[:] = self._torques
-      mujoco.mj_step(self.model, self.data)
-      self._time_since_reset += self._sim_config.dt
-    if self._sim_config.render:
-      self.viewer.render()
-    self._root_states[:, :3] = self.data.qpos[:3]
-    self._root_states[:, 3:7] = self.data.qpos[3:7]
-    self._root_states[:, 7:10] = self.data.qvel[:3]
-    self._root_states[:, 10:13] = self.data.qvel[3:6]
-    self._post_physics_step()
+    if not self.viewer_paused:
+      for _ in range(self._sim_config.action_repeat):
+        self._torques, _ = self.motor_group.convert_to_torque(
+            action, self._motor_positions, self._motor_velocities)
+        self.data.ctrl[:] = self._torques
+        mujoco.mj_step(self.model, self.data)
+        self._time_since_reset += self._sim_config.dt
+      # if self._sim_config.render:
+        # self.viewer.render()
+        # mujoco.viewer.sync()
+      self.viewer.sync()
+      self._root_states[:, :3] = self.data.qpos[:3]
+      self._root_states[:, 3:7] = self.data.qpos[3:7]
+      self._root_states[:, 7:10] = self.data.qvel[:3]
+      self._root_states[:, 10:13] = self.data.qvel[3:6]
+      self._post_physics_step()
+      self.viewer.cam.lookat[0] = self.data.qpos[0]
+      self.viewer.cam.lookat[1] = self.data.qpos[1]
+      self.viewer.cam.lookat[2] = 0.5
+      self.viewer.cam.azimuth = 90
 
   def _post_physics_step(self):
     
     self._base_quat[:] = self._root_states[:, 3:7]
     self._base_rot_mat = quat_to_rot_mat_np(self._base_quat)
+
     self._base_rot_mat_t = np.transpose(self._base_rot_mat, (0,1, 2))
     self._base_lin_vel_world = self._root_states[:, 7:10]
     self._base_ang_vel_world = self._root_states[:, 10:13]
@@ -207,12 +254,15 @@ class Robot:
     #                                                    13)[:,
     #                                                        self._feet_indices,
     #   
+   
     self._foot_positions = self.data.xpos[self._feet_indices].reshape(1, 4, 3)
     self._foot_velocities = self.data.cvel[self._feet_indices].reshape(1, 4, 6)[:,:,3:]
     # print("self._foot_positions")
     # print(self._foot_positions)
     # print("self._foot_velocities")
     # print(self._foot_velocities)
+    # exit()
+    
     # exit()
 
   def get_motor_angles_from_foot_positions(self, foot_local_positions):
@@ -298,6 +348,13 @@ class Robot:
                      base_position_world_frame[:, None, :])
     # print("foot_position_world_frame")
     # print(foot_positions_world_frame)
+    # print("base_position_world_frame")
+    # print(base_position_world_frame)
+    # print("foot_position")
+    # print(foot_position)
+    # print("self._base_rot_mat_t")
+    # print(self._base_rot_mat_t)
+    # exit()
     return np.matmul(self._base_rot_mat_t, foot_position.transpose(0, 2, 1)).transpose(0, 2, 1)
 
   @property

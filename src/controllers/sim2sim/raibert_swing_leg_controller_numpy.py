@@ -123,6 +123,7 @@ class RaibertSwingLegController:
 
   def update(self) -> None:
     new_leg_state = np.copy(self._gait_generator.desired_contact_state)
+    
     new_foot_positions = np.matmul(
         self._robot.base_rot_mat,
         np.transpose(self._robot.foot_positions_in_base_frame, (0, 2, 1))).transpose(0, 2, 1)
@@ -131,6 +132,7 @@ class RaibertSwingLegController:
                    [1, 1, 3]), self._phase_switch_foot_positions,
         new_foot_positions)
     self._last_leg_state = new_leg_state
+    
 
   @property
   def desired_foot_positions(self):

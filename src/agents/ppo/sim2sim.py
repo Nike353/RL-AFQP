@@ -119,8 +119,9 @@ class Sim2sim:
                           init_positions=self._init_positions,
                           sim_config=cfg.sim_config,
                           motor_control_mode=MotorControlMode.HYBRID,
-                          motor_torque_delay_steps=self.cfg.get('motor_torque_delay_steps', 0))  
-        self._robot.set_foot_frictions(self.cfg.get('foot_friction', np.array([1., 1., 1., 1.])))
+                          motor_torque_delay_steps=self.cfg.get('motor_torque_delay_steps', 0)) 
+        
+        self._robot.set_foot_frictions(self.cfg.get('foot_friction', np.array([5., 5., 5., 5.])))
         self._gait_generator = phase_gait_generator_numpy.PhaseGaitGenerator(self._robot, cfg.gait)
         self._swing_leg_controller = raibert_swing_leg_controller_numpy.RaibertSwingLegController(
                 self._robot, self._gait_generator, foot_height=self.cfg.swing_foot_height, 
@@ -144,7 +145,7 @@ class Sim2sim:
         self._cycle_count = np.zeros((self.num_envs,))
         self._jumping_distance = np.zeros((self.num_envs, 2))
         self._desired_landing_position[0,2] = 0.268
-        self._jumping_distance[0,0] = 0.3
+        self._jumping_distance[0,0] = 0.5
         self._jumping_distance[0,1] = 0.0
         self._resample_command(np.arange(self.num_envs))
     ## TODO: set the action space in cfg file
@@ -210,6 +211,7 @@ class Sim2sim:
         return gait_action, com_action, foot_action
     
     def reset(self):
+        
         return self._normalize_obs(self.reset_idx(np.arange(self.num_envs)))
     
     def reset_idx(self,env_ids):
@@ -217,20 +219,22 @@ class Sim2sim:
         self._steps_count[env_ids] = 0
         self._cycle_count[env_ids] = 0
         self._init_yaw[env_ids] = self._robot.base_orientation_rpy[env_ids, 2]
+        
         self._robot.reset_idx(env_ids)
         self._swing_leg_controller.reset_idx(env_ids)
         self._gait_generator.reset_idx(env_ids)
         self._resample_command(env_ids)
-        print("obs_buf_before_normalize")
-        print(self._obs_buf)
+        
         return self._obs_buf
     
     def step(self,action):
         action = self._denormalize_action(action)
+       
         self._last_action = action.copy()
         action = np.clip(action, self._actions_lb, self._actions_ub)
         zero = np.zeros((self.num_envs,))
         gait_action, com_action, foot_action = self._split_action(action)
+        
         desired_linear_vel_z = (com_action[:, 2] -
                                  self._torque_optimizer.desired_base_position[:, 2]
                                  ) / self.cfg.env_dt
@@ -239,6 +243,7 @@ class Sim2sim:
                              self._torque_optimizer.desired_base_orientation_rpy[:, 1]
                              ) / self.cfg.env_dt
         desired_ang_vel_y = desired_ang_vel_y.clip(min=-0., max=0.)
+        
         for step in range(
             max(int(self.cfg.env_dt / self._robot.control_timestep), 1)):
             self._gait_generator.update()
@@ -265,6 +270,7 @@ class Sim2sim:
                 self._torque_optimizer.desired_angular_velocity = np.stack(
                     (zero, com_action[:, 6], com_action[:, 7] * 0), axis=1)
             desired_foot_positions = self._swing_leg_controller.desired_foot_positions
+            
             if foot_action is not None:
                 base_yaw = self._robot.base_orientation_rpy[:, 2]
                 cos_yaw = np.cos(base_yaw)[:, None]
@@ -275,9 +281,13 @@ class Sim2sim:
                 foot_action_world[:, :, 1] = (sin_yaw * foot_action[:, :, 0] +
                                                 cos_yaw * foot_action[:, :, 1])
                 desired_foot_positions += foot_action_world
+            
             motor_action, self._desired_acc, self._solved_acc, self._qp_cost, self._num_clips = self._torque_optimizer.get_action(
                 self._gait_generator.desired_contact_state,
                 swing_foot_position=desired_foot_positions)
+            # print("motor_action")
+            # print(motor_action)
+            # exit()
             self._robot.step(motor_action)
             self._obs_buf = self.get_obs()
             new_cycle_count = np.floor(self._gait_generator.true_phase / (2 * np.pi)).astype(np.int64)
@@ -322,7 +332,7 @@ class Sim2sim:
         if self.cfg.get("observation_noise",
                             None) is not None:
             obs += np.random.randn_like(obs) * self.cfg.observation_noise
-        
+        # print("foot_pos",np.round(self._robot.foot_positions_in_base_frame,2))
         return obs
 
     def run_mujoco(self,policy):
@@ -337,16 +347,22 @@ class Sim2sim:
             None
         """
         step_count = 0
+       
         state = self.reset()
-        print("obs_buf_after_reset")
-        # print(state)
-        # exit()
         
+        # exit()
         for _ in tqdm(range(int(self.sim_config.sim_duration / self.sim_config.dt)), desc="Simulating..."):
             step_count += 1
+
             action = policy(torch.tensor(state.astype(np.float32))).detach().numpy()
             
+            # exit()
+            # import ipdb; ipdb.set_trace()
+            
             state = self.step(action)
+            # print("state")
+            # print(np.round(state,2))
+            # exit()    
 
         self._robot.viewer.close()
 

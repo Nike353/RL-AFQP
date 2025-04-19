@@ -26,24 +26,24 @@ def batch_matmul(A: np.ndarray, B: np.ndarray) -> np.ndarray:
 def quater_mul(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
     """
     Multiplies two quaternions q1 and q2.
-    Quaternions are in the (x, y, z, w) format.
+    Quaternions are in the (w, x, y, z) format.
     
     Args:
-        q1: NumPy array of shape (..., 4)
-        q2: NumPy array of shape (..., 4)
+        q1: NumPy array of shape (..., 4) in (w, x, y, z) format
+        q2: NumPy array of shape (..., 4) in (w, x, y, z) format
     
     Returns:
-        A NumPy array of shape (..., 4) representing the quaternion product.
+        A NumPy array of shape (..., 4) representing the quaternion product in (w, x, y, z) format.
     """
-    x1, y1, z1, w1 = np.split(q1, 4, axis=-1)
-    x2, y2, z2, w2 = np.split(q2, 4, axis=-1)
+    w1, x1, y1, z1 = np.split(q1, 4, axis=-1)
+    w2, x2, y2, z2 = np.split(q2, 4, axis=-1)
 
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
     x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
     y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
     z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
 
-    return np.concatenate([x, y, z, w], axis=-1)
+    return np.concatenate([w, x, y, z], axis=-1)
 
 def quater_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     """
@@ -56,23 +56,39 @@ def quater_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     Returns:
         Rotated vector of shape (..., 3).
     """
-    # Convert vector to quaternion form (x, y, z, w) with w=0
-    v_quat = np.concatenate([v, np.zeros_like(v[..., :1])], axis=-1)  # (..., 4)
+    # Convert vector to quaternion form (w, x, y, z) with w=0
+    v_quat = np.concatenate([np.zeros_like(v[..., :1]), v], axis=-1)  # (..., 4)
 
-    # Compute inverse quaternion
-    q_conj = np.concatenate([-q[..., :3], q[..., 3:]], axis=-1)  # Negate (x, y, z), keep w
+    # Compute conjugate of q: negate vector part (x, y, z), keep scalar part (w)
+    q_conj = np.concatenate([q[..., :1], -q[..., 1:]], axis=-1)
+
 
     # Perform quaternion-vector rotation: v' = q * v * q^(-1)
     v_rotated = quater_mul(quater_mul(q, v_quat), q_conj)
 
     # Return only the vector part (x, y, z)
-    return v_rotated[..., :3]
+    return v_rotated[..., 1:]
 
 def quaternion_to_axis_angle(q):
-  angle = 2 * np.arccos(np.clip(q[:, 3], -0.99999, 0.99999))[:, None]
-  norm = np.clip(np.linalg.norm(q[:, :3], axis=1), 1e-5, 1)[:, None]
-  axis = q[:, :3] / norm
-  return axis, angle
+    """
+    Converts quaternions in (w, x, y, z) format to axis-angle representation.
+
+    Args:
+        q: NumPy array of shape (N, 4), quaternions in (w, x, y, z)
+
+    Returns:
+        axis: (N, 3) normalized axis of rotation
+        angle: (N, 1) rotation angle in radians
+    """
+    # Extract angle from scalar part
+    angle = 2 * np.arccos(np.clip(q[:, 0], -0.99999, 0.99999))[:, None]
+
+    # Extract vector part and normalize
+    norm = np.clip(np.linalg.norm(q[:, 1:], axis=1), 1e-5, 1)[:, None]
+    axis = q[:, 1:] / norm
+
+    return axis, angle
+
 
 def quater_from_euler_xyz(roll: np.ndarray, pitch: np.ndarray, yaw: np.ndarray) -> np.ndarray:
     """
@@ -98,22 +114,50 @@ def quater_from_euler_xyz(roll: np.ndarray, pitch: np.ndarray, yaw: np.ndarray) 
     z = cr * cp * sy - sr * sp * cy
     w = cr * cp * cy + sr * sp * sy
 
-    return np.stack([x, y, z, w], axis=-1)
+    return np.stack([w, x, y, z], axis=-1)
 
 
 def compute_orientation_error(desired_orientation_rpy,
                               base_orientation_quat,
                               device: str = 'cuda'):
-  desired_quat = quater_from_euler_xyz(
-      desired_orientation_rpy[:, 0], desired_orientation_rpy[:, 1],
-      np.zeros_like(desired_orientation_rpy[:, 2]))
-  base_quat_inv = np.copy(base_orientation_quat)
-  base_quat_inv[:, -1] *= -1
-  error_quat = quater_mul(desired_quat, base_quat_inv)
-  axis, angle = quaternion_to_axis_angle(error_quat)
-  angle = np.where(angle > np.pi, angle - 2 * np.pi, angle)
-  error_so3 = axis * angle
-  return quater_rotate(base_orientation_quat, error_so3)
+    """
+    Computes orientation error in base frame, given desired orientation (RPY)
+    and current base orientation in quaternion (w, x, y, z) format.
+
+    Args:
+        desired_orientation_rpy: (N, 3) Euler angles (roll, pitch, yaw)
+        base_orientation_quat: (N, 4) quaternions in (w, x, y, z)
+        device: not used here, placeholder for PyTorch compatibility
+
+    Returns:
+        (N, 3) orientation error in base frame
+    """
+    # Construct desired quaternion with yaw = 0
+    desired_quat = quater_from_euler_xyz(
+        desired_orientation_rpy[:, 0],  # roll
+        desired_orientation_rpy[:, 1],  # pitch
+        np.zeros_like(desired_orientation_rpy[:, 2])  # yaw = 0
+    )
+
+    # Invert base orientation: conjugate = [w, -x, -y, -z]
+    base_quat_inv = np.copy(base_orientation_quat)
+    base_quat_inv[:, 1:] *= -1
+
+    # Compute error quaternion: q_error = q_desired * q_base_conjugate
+    error_quat = quater_mul(desired_quat, base_quat_inv)
+
+    # Convert error quaternion to axis-angle
+    axis, angle = quaternion_to_axis_angle(error_quat)
+
+    # Wrap angle to [-pi, pi]
+    angle = np.where(angle > np.pi, angle - 2 * np.pi, angle)
+
+    # Compute orientation error in world frame
+    error_so3 = axis * angle  # shape: (N, 3)
+
+    # Rotate error into base frame
+    return quater_rotate(base_orientation_quat, error_so3)
+
 
 
 def compute_desired_acc(

@@ -51,6 +51,7 @@ class PhaseGaitGenerator:
     self._current_phase += 2 * np.pi * self._stepping_frequency[:,
                                                                    None] * delta_t[:,
                                                                                    None]
+    
 
   @property
   def desired_contact_state(self):

@@ -97,11 +97,10 @@ def main(argv):
   # ipdb.set_trace()
   state, _ = env.reset()
   print("obs_buf_after_reset")
-  print(state)
-  exit()
+  # print(state)
+  # exit()
   total_reward = torch.zeros(FLAGS.num_envs, device=device)
   steps_count = 0
-  # print(state)
   # exit()
   start_time = time.time()
   logs = []
@@ -109,9 +108,14 @@ def main(argv):
     while True:
       steps_count += 1
       action = policy(state)
+    
+      # exit()
+      # import ipdb; ipdb.set_trace()
       state, _, reward, done, info = env.step(action)
       print(f"Time: {env.robot.time_since_reset}, Reward: {reward}")
-
+      # print("state")
+      # print(state)
+      # exit()
 
       total_reward += reward
       logs.extend(info["logs"])

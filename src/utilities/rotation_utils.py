@@ -26,21 +26,25 @@ def quat_to_rot_mat(q):
 
 def quat_to_rot_mat_np(q):
   n = q.shape[0]
-  x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+
+  w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
   Nq = w * w + x * x + y * y + z * z
   s = 2.0 / Nq
+
   X, Y, Z = x * s, y * s, z * s
   wX, wY, wZ = w * X, w * Y, w * Z
   xX, xY, xZ = x * X, x * Y, x * Z
   yY, yZ = y * Y, y * Z
   zZ = z * Z
 
-  rotation_matrix = np.stack([
+  R = np.stack([
       np.stack([1.0 - (yY + zZ), xY - wZ, xZ + wY], axis=-1),
       np.stack([xY + wZ, 1.0 - (xX + zZ), yZ - wX], axis=-1),
       np.stack([xZ - wY, yZ + wX, 1.0 - (xX + yY)], axis=-1)
-  ],axis=-2)
-  return rotation_matrix
+  ], axis=-2)  # shape: (N, 3, 3)
+
+  return R
+
 @torch.jit.script
 def copysign(a, b):
   # type: (float, Tensor) -> Tensor
