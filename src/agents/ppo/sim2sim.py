@@ -40,50 +40,12 @@ from src.robots.sim2sim.go1 import Go1
 from src.robots.sim2sim.motors import MotorControlMode
 from src.controllers.sim2sim import phase_gait_generator_numpy, raibert_swing_leg_controller_numpy, qp_torque_optimizer_numpy
 
-class cmd:
-    vx = 0.4
-    vy = 0.0
-    dyaw = 0.0
+import mujoco
+import matplotlib.pyplot as plt
+import csv
 
 
-def quaternion_to_euler_array(quat):
-    # Ensure quaternion is in the correct format [x, y, z, w]
-    x, y, z, w = quat
-    
-    # Roll (x-axis rotation)
-    t0 = +2.0 * (w * x + y * z)
-    t1 = +1.0 - 2.0 * (x * x + y * y)
-    roll_x = np.arctan2(t0, t1)
-    
-    # Pitch (y-axis rotation)
-    t2 = +2.0 * (w * y - z * x)
-    t2 = np.clip(t2, -1.0, 1.0)
-    pitch_y = np.arcsin(t2)
-    
-    # Yaw (z-axis rotation)
-    t3 = +2.0 * (w * z + x * y)
-    t4 = +1.0 - 2.0 * (y * y + z * z)
-    yaw_z = np.arctan2(t3, t4)
-    
-    # Returns roll, pitch, yaw in a NumPy array in radians
-    return np.array([roll_x, pitch_y, yaw_z])
 
-def get_obs(data):
-    '''Extracts an observation from the mujoco data structure
-    '''
-    q = data.qpos.astype(np.double)
-    dq = data.qvel.astype(np.double)
-    quat = data.sensor('orientation').data[[1, 2, 3, 0]].astype(np.double)
-    r = R.from_quat(quat)
-    v = r.apply(data.qvel[:3], inverse=True).astype(np.double)  # In the base frame
-    omega = data.sensor('angular-velocity').data.astype(np.double)
-    gvec = r.apply(np.array([0., 0., -1.]), inverse=True).astype(np.double)
-    return (q, dq, quat, v, omega, gvec)
-
-def pd_control(target_q, q, kp, target_dq, dq, kd):
-    '''Calculates torques from position commands
-    '''
-    return (target_q - q) * kp + (target_dq - dq) * kd
 
 def gravity_frame_to_world_frame(robot_yaw, gravity_frame_vec):
   cos_yaw = np.cos(robot_yaw)
@@ -149,6 +111,7 @@ class Sim2sim:
         self._jumping_distance[0,1] = 0.0
         self._resample_command(np.arange(self.num_envs))
     ## TODO: set the action space in cfg file
+
     def _construct_observation_and_action_space(self):
         robot_lb = np.array([0., -3.14, -3.14, -4., -4., -10., -3.14, -3.14, -3.14] +
                             [-0.5, -0.5, -0.4] * 4)
@@ -199,8 +162,8 @@ class Sim2sim:
                     foot_action[:, 0],
                     foot_action[:, 1],
                     foot_action[:, 1],
-        ],
-                                  axis=1)
+                    ],
+                    axis=1)
                 action = action[:, :-6]
             else:
                 foot_action = action[:, -12:].reshape(
@@ -335,7 +298,7 @@ class Sim2sim:
         # print("foot_pos",np.round(self._robot.foot_positions_in_base_frame,2))
         return obs
 
-    def run_mujoco(self,policy):
+    def run_mujoco(self,policy,params):
         """
         Run the Mujoco simulation using the provided policy and configuration.
 
@@ -347,10 +310,20 @@ class Sim2sim:
             None
         """
         step_count = 0
-       
+
+        trunk_body_id = mujoco.mj_name2id(self._robot.model, mujoco.mjtObj.mjOBJ_BODY, "trunk")
+        #checking default mass, com, moment of inertia
+        print('checking default params')
+        print('mass:',self._robot.model.body_mass[trunk_body_id])
+        print('com',self._robot.model.body_ipos[trunk_body_id])
+        print('moment of inertia',self._robot.model.body_inertia[trunk_body_id])
+
+        self._robot.model.body_mass[trunk_body_id] = params
+        print('mass:',self._robot.model.body_mass[trunk_body_id])
         state = self.reset()
         
         # exit()
+        startpos_x=self._robot.base_position[0][0]
         for _ in tqdm(range(int(self.sim_config.sim_duration / self.sim_config.dt)), desc="Simulating..."):
             step_count += 1
 
@@ -363,8 +336,12 @@ class Sim2sim:
             # print("state")
             # print(np.round(state,2))
             # exit()    
-
+            if self._robot.base_position_world[0,2] < 0.15:
+                break
         self._robot.viewer.close()
+        print(self._robot.base_position[0][0] - startpos_x)
+        return (self._robot.base_position[0][0] - startpos_x)
+        
 
 
 if __name__ == '__main__':
@@ -375,56 +352,69 @@ if __name__ == '__main__':
                         help='Run to load from.')
     parser.add_argument('--terrain', action='store_true', help='terrain or plane')
     args = parser.parse_args()
+    mass_list = [5.204]
+    for mass in mass_list:
+        class Sim2simCfg(): 
 
-    class Sim2simCfg():
+            sim_config=ConfigDict() 
+            sim_config.sim_duration = 60.0
+            sim_config.dt = 0.002  
+            sim_config.decimation = 10
+            sim_config.render = True
+            sim_config.action_repeat = 1
+            gait = ConfigDict()
+            gait.stepping_frequency = 1
+            gait.initial_offset = np.array([0., 0., 0., 0.]) * (2 * np.pi)
+            gait.swing_ratio = np.array([0.5, 0.5, 0.5, 0.5])
+            cfg = ConfigDict()
+            cfg.goal_lb = np.array([0.3, 0.])
+            cfg.goal_ub = np.array([1., 0.])
 
-        sim_config=ConfigDict() 
-        sim_config.sim_duration = 60.0
-        sim_config.dt = 0.002  
-        sim_config.decimation = 10
-        sim_config.render = True
-        sim_config.action_repeat = 1
-        gait = ConfigDict()
-        gait.stepping_frequency = 1
-        gait.initial_offset = np.array([0., 0., 0., 0.]) * (2 * np.pi)
-        gait.swing_ratio = np.array([0.5, 0.5, 0.5, 0.5])
-        cfg = ConfigDict()
-        cfg.goal_lb = np.array([0.3, 0.])
-        cfg.goal_ub = np.array([1., 0.])
+            cfg.include_gait_action = True
+            cfg.include_foot_action = True
+            cfg.mirror_foot_action = True
 
-        cfg.include_gait_action = True
-        cfg.include_foot_action = True
-        cfg.mirror_foot_action = True
+            cfg.action_lb = np.array([0.5, -0.001, -3, -0.001, -3., -0.001, -0.001, -2.5, -0.001] +
+                                    [-0.1, -0.0001, 0.] * 2)
+            cfg.action_ub = np.array([3.999, 0.001, 3, 0.001, 3., 0.001, 0.001, 2.5, 0.001] +
+                                [0.1, 0.001, 0.2] * 2)
+            
+            cfg.episode_length_s = 20.
+            cfg.max_jumps = 10.
+            cfg.env_dt = 0.01
+            cfg.motor_strength_ratios = 1.
+            cfg.motor_torque_delay_steps = 5
+            cfg.use_yaw_feedback = False
+            cfg.foot_friction = [1., 1., 1., 1.]  #0.7
+            cfg.base_position_kp = np.array([0., 0., 0.])
+            cfg.base_position_kd = np.array([10., 10., 10.])
+            cfg.base_orientation_kp = np.array([50., 0., 0.])
+            cfg.base_orientation_kd = np.array([10., 10., 10.])
+            cfg.qp_foot_friction_coef = 0.6
+            cfg.qp_weight_ddq = np.diag([1., 1., 10., 10., 10., 1.])
+            cfg.qp_body_inertia = np.array([0.14, 0.35, 0.35]) * 1.5
+            cfg.use_full_qp = False
+            cfg.clip_grf_in_sim = True
+            cfg.swing_foot_height = 0.
+            cfg.swing_foot_landing_clearance = 0.
+            cfg.terminate_on_body_contact = True
+            cfg.terminate_on_limb_contact = False
+            cfg.terminate_on_height = 0.15
+            cfg.use_penetrating_contact = False
 
-        cfg.action_lb = np.array([0.5, -0.001, -3, -0.001, -3., -0.001, -0.001, -2.5, -0.001] +
-                                [-0.1, -0.0001, 0.] * 2)
-        cfg.action_ub = np.array([3.999, 0.001, 3, 0.001, 3., 0.001, 0.001, 2.5, 0.001] +
-                               [0.1, 0.001, 0.2] * 2)
+
+        policy = torch.jit.load(args.load_model)
+        sim2sim = Sim2sim(Sim2simCfg())
+        dist = sim2sim.run_mujoco(policy,mass)
+        print(dist)
+        # dist_list.append(dist)
         
-        cfg.episode_length_s = 20.
-        cfg.max_jumps = 10.
-        cfg.env_dt = 0.01
-        cfg.motor_strength_ratios = 1.
-        cfg.motor_torque_delay_steps = 5
-        cfg.use_yaw_feedback = False
-        cfg.foot_friction = [1., 1., 1., 1.]  #0.7
-        cfg.base_position_kp = np.array([0., 0., 0.])
-        cfg.base_position_kd = np.array([10., 10., 10.])
-        cfg.base_orientation_kp = np.array([50., 0., 0.])
-        cfg.base_orientation_kd = np.array([10., 10., 10.])
-        cfg.qp_foot_friction_coef = 0.6
-        cfg.qp_weight_ddq = np.diag([1., 1., 10., 10., 10., 1.])
-        cfg.qp_body_inertia = np.array([0.14, 0.35, 0.35]) * 1.5
-        cfg.use_full_qp = False
-        cfg.clip_grf_in_sim = True
-        cfg.swing_foot_height = 0.
-        cfg.swing_foot_landing_clearance = 0.
-        cfg.terminate_on_body_contact = True
-        cfg.terminate_on_limb_contact = False
-        cfg.terminate_on_height = 0.15
-        cfg.use_penetrating_contact = False
-
-
-    policy = torch.jit.load(args.load_model)
-    sim2sim = Sim2sim(Sim2simCfg())
-    sim2sim.run_mujoco(policy)
+    ##save in a npz file
+    #open the npz file and add a new key
+    # data = np.load('data.npz')
+    # data = dict(data)
+    # data['adaptive_mass_dist_2'] = dist_list
+    # np.savez('data.npz',**data)
+    # # np.savez('data.npz',adaptive_mass_dist=dist_list)
+    # plt.plot(mass_list,dist_list)
+    # plt.show()

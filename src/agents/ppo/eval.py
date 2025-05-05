@@ -119,9 +119,9 @@ def main(argv):
 
       total_reward += reward
       logs.extend(info["logs"])
-      if done.any():
-        print(info["episode"])
-        break
+      # if done.any():
+      #   print(info["episode"])
+      #   break
 
   print(f"Total reward: {total_reward}")
   print(f"Time elapsed: {time.time() - start_time}")

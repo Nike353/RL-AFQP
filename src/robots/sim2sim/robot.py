@@ -38,7 +38,7 @@ class Robot:
 
     self._base_init_state = self._compute_base_init_state(init_positions)
     self._init_motor_angles = self._motors.init_positions
-
+    self.render = True
     self._load_xml(xml_path)
     self.num_envs = 1
     self._init_buffers()
@@ -46,6 +46,7 @@ class Robot:
     self._time_since_reset = np.zeros(1)
     # self.reset()
     self._post_physics_step()
+    
     
     # self.reset()
 
@@ -73,7 +74,8 @@ class Robot:
     
     
     # self.viewer = 
-    self.viewer = mujoco.viewer.launch_passive(self.model,self.data,
+    if self.render:
+      self.viewer = mujoco.viewer.launch_passive(self.model,self.data,
                                                show_left_ui=False,
                                                show_right_ui=False,
                                                key_callback=self.viewer_key_callback)
@@ -85,7 +87,7 @@ class Robot:
     # default_qpos = np.array([0.0,0.0,0.27,1.0,0.0,0.0,0.0,0.0,0.9,-1.8,0.0,0.9,-1.8,0.0,0.9,-1.8,0.0,0.9,-1.8])
     # self.data.qpos = default_qpos.copy()
     tree = ET.parse(xml_path)
-    self.viewer_paused = True
+    self.viewer_paused = False
     root = tree.getroot()
     kf_element = root.find(".//key[@name='home']")
     if kf_element is not None and 'qpos' in kf_element.attrib:
@@ -103,7 +105,8 @@ class Robot:
         self.data.qpos[:] = [0,0,0.27,1,0,0,0,0,0.9,-1.8,0,0.9,-1.8,0,0.9,-1.8,0,0.9,-1.8]
         mujoco.mj_forward(self.model, self.data)
         print("No keyframe element with attribute 'qpos' found; using default qpos values.")
-    self.viewer.sync()
+    if self.render:
+      self.viewer.sync()
     print("hi")
     self._num_dof = self.model.nu
     self._num_bodies = self.model.nbody
@@ -126,6 +129,8 @@ class Robot:
         self._body_indices.append(i)
         self._body_names.append(body_name)
     
+    # exit()
+    
   ###viewer related functions  
   def viewer_key_callback(self, keycode):
     if chr(keycode) == ' ':
@@ -133,6 +138,7 @@ class Robot:
             self.viewer_paused = not self.viewer_paused
     elif chr(keycode) == 'E':
             self.viewer.opt.frame = not self.viewer.opt.frame
+            
   def _init_buffers(self):
     # get gym GPU state tensors
     
@@ -225,16 +231,18 @@ class Robot:
       # if self._sim_config.render:
         # self.viewer.render()
         # mujoco.viewer.sync()
-      self.viewer.sync()
+      if self.render:
+        self.viewer.sync()
+        self.viewer.cam.lookat[0] = self.data.qpos[0]
+        self.viewer.cam.lookat[1] = self.data.qpos[1]
+        self.viewer.cam.lookat[2] = 0.5
+        self.viewer.cam.azimuth = 90
       self._root_states[:, :3] = self.data.qpos[:3]
       self._root_states[:, 3:7] = self.data.qpos[3:7]
       self._root_states[:, 7:10] = self.data.qvel[:3]
       self._root_states[:, 10:13] = self.data.qvel[3:6]
       self._post_physics_step()
-      self.viewer.cam.lookat[0] = self.data.qpos[0]
-      self.viewer.cam.lookat[1] = self.data.qpos[1]
-      self.viewer.cam.lookat[2] = 0.5
-      self.viewer.cam.azimuth = 90
+      
 
   def _post_physics_step(self):
     

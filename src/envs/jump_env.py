@@ -336,8 +336,7 @@ class JumpEnv:
       self._swing_leg_controller.reset_idx(env_ids)
       self._gait_generator.reset_idx(env_ids)
       self._resample_command(env_ids)
-    print("self._obs_buf_inside_env")
-    print(self._obs_buf)
+   
     return self._obs_buf, self._privileged_obs_buf
 
   def step(self, action: torch.Tensor):
@@ -612,6 +611,7 @@ class JumpEnv:
     timeout = (self._steps_count >= self._episode_length)
     cycles_finished = (self._gait_generator.true_phase /
                        (2 * torch.pi)) > self._config.get('max_jumps', 1)
+    # print(cycles_finished)
     return torch.logical_or(timeout, cycles_finished)
 
   def _is_done(self):

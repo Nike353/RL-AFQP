@@ -432,6 +432,10 @@ class QPTorqueOptimizer:
     self._inv_mass = np.eye(3) / body_mass
     self._inv_inertia = np.linalg.inv(
         np.diag(np.array(body_inertia, dtype=np.float32)))
+    self._mass = np.ones(self._num_envs) * body_mass
+    self._inertia = np.ones((self._num_envs,3)) * np.array(body_inertia, dtype=np.float32)
+    self._ref_mI_mat = self._create_ref_mass_inertia_mat()
+    self._robot_mI_mat = self._create_robot_mass_inertia_mat()
 
   def _solve_joint_torques(self, foot_contact_state, desired_com_ddq):
     """Solves centroidal QP to find desired joint torques."""
@@ -497,6 +501,20 @@ class QPTorqueOptimizer:
         desired_acc_body_frame,
         np.array([-30, -30, -10, -20, -20, -20],dtype=np.float32),
         np.array([30, 30, 30, 20, 20, 20], dtype=np.float32))
+    
+    ## code to add extra adaptation for the robot
+    g = np.zeros((self._num_envs, 3))
+    g[:, 2] = -9.8   
+    g[:, :3] = np.matmul(self._robot.base_rot_mat_t, g[:, :3, None])[:, :, 0]
+    # print("self._ref_mI_mat.shape: ", self._ref_mI_mat.shape)
+    # print("self._robot_mI_mat.shape: ", self._robot_mI_mat.shape)
+    # print("self._create_ref_gravity_vec(self._mass, g).shape: ", self._create_ref_gravity_vec(self._mass, g).shape)
+    # print("self._create_robot_gravity_vec(g).shape: ", self._create_robot_gravity_vec(g).shape)
+    # print("desired_acc_body_frame.shape: ", desired_acc_body_frame.shape)
+    # exit()
+    extra_acc = np.matmul(np.linalg.inv(self._ref_mI_mat[0]), (np.matmul(self._robot_mI_mat[0]-self._ref_mI_mat[0], desired_acc_body_frame[0]) - self._create_ref_gravity_vec(self._mass, g)[0]+self._create_robot_gravity_vec(g)[0])).reshape(1,-1)
+    desired_acc_body_frame = desired_acc_body_frame + 1.2*extra_acc
+
     motor_torques, solved_acc, grf, qp_cost, num_clips = self._solve_joint_torques(
         foot_contact_state, desired_acc_body_frame)
     foot_position_local = np.matmul(self._robot.base_rot_mat_t,
@@ -597,6 +615,49 @@ class QPTorqueOptimizer:
         kd=np.ones_like(self._robot.motor_group.kds) * 1,
         desired_extra_torque=desired_torque
     ), desired_acc_body_frame, solved_acc, qp_cost, num_clips
+  
+  def _create_ref_mass_inertia_mat(self):
+    mass_block = np.eye(3)[None,:,:]*self._mass[:,None,None]
+    inertia_block = np.zeros((self._num_envs,3,3))
+    for i in range(3):
+      inertia_block[:,i,i] = self._inertia[:,i]
+    
+    zero_block = np.zeros((self._num_envs, 3, 3))
+
+    top = np.concatenate([mass_block, zero_block], axis=2)    # (N, 3, 6)
+    bottom = np.concatenate([zero_block, inertia_block], axis=2)  # (N, 3, 6)
+
+    mass_inertia = np.concatenate([top, bottom], axis=1)  # (N, 6, 6)
+    return mass_inertia
+    
+    
+
+  def _create_robot_mass_inertia_mat(self):
+    body_mass = np.ones(self._num_envs) * np.sum(self._robot.model.body_mass)
+    body_inertia = np.ones((self._num_envs,3)) * 1*np.array([self._robot.model.body_inertia[1][2],self._robot.model.body_inertia[1][1],self._robot.model.body_inertia[1][0]], dtype=np.float32)
+    mass_block = np.eye(3)[None, :, :] * body_mass[:, None, None]
+    inertia_block = np.zeros((self._num_envs, 3, 3))
+    for i in range(3):
+      inertia_block[:, i, i] = body_inertia[:, i]
+    zero_block = np.zeros((self._num_envs, 3, 3))
+    top = np.concatenate([mass_block, zero_block], axis=2)    # (N, 3, 6)
+    bottom = np.concatenate([zero_block, inertia_block], axis=2)  # (N, 3, 6)
+    mass_inertia = np.concatenate([top, bottom], axis=1)  # (N, 6, 6)
+    return mass_inertia
+
+
+  def _create_ref_gravity_vec(self,body_mass,gravity_vec):
+    gravity_forces = body_mass * gravity_vec[:]  # (N, 3)
+    # print("gravity_forces.shape: ", gravity_forces.shape)
+    gravity = np.concatenate([gravity_forces, np.zeros((self._num_envs, 3))], axis=1)  # (N, 6)
+    return gravity
+
+    
+  def _create_robot_gravity_vec(self,gravity_vec):
+    body_mass = np.ones(self._num_envs) * np.sum(self._robot.model.body_mass)
+    gravity_forces = body_mass[:] * gravity_vec[:]  # (N, 3)
+    gravity = np.concatenate([gravity_forces, np.zeros((self._num_envs, 3))], axis=1)  # (N, 6)
+    return gravity
 
   @property
   def desired_base_position(self) -> np.ndarray:

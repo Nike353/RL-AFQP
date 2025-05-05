@@ -207,10 +207,7 @@ class Robot:
                                 dtype=torch.float,
                                 device=self._device,
                                 requires_grad=False)
-    print("self._foot_positions")
-    print(self._foot_positions)
-    print("self._root_states")
-    print(self._root_states)
+    
     
     
 
@@ -280,11 +277,7 @@ class Robot:
                                                        13)[:,
                                                            self._feet_indices,
                                                            0:3]
-    print("self._foot_positions_after_post_physics_step")
-    print(self._foot_positions)
-    print("self._root_states_after_post_physics_step")
-    print(self._root_states)
-    exit()
+    
 
   def render(self, sync_frame_time=True):
     if self._viewer:
@@ -385,13 +378,7 @@ class Robot:
     # num_env x 4 x 3
     foot_position = (foot_positions_world_frame -
                      base_position_world_frame[:, None, :])
-    print("foot_position_world_frame")
-    print(foot_positions_world_frame)
-    print("base_position_world_frame")
-    print(base_position_world_frame)
-    print("foot_position")
-    print(foot_position)
-    exit()
+    
     return torch.matmul(self._base_rot_mat_t,
                         foot_position.transpose(1, 2)).transpose(1, 2)
 

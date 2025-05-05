@@ -17,7 +17,7 @@ def motor_angles_from_foot_positions(foot_local_positions,
   foot_positions_in_hip_frame = foot_local_positions - hip_offset
   l_up = 0.213
   l_low = 0.233
-  l_hip = 0.08 * np.array([-1, 1, -1, 1])
+  l_hip = 0.08 * np.array([-1, 1, -1, 1])      ### this order is correct for sim2sim as well 
 
   x = foot_positions_in_hip_frame[:, :, 0]
   y = foot_positions_in_hip_frame[:, :, 1]
