@@ -34,11 +34,14 @@ import numpy as np
 from tqdm import tqdm
 from collections import deque
 from scipy.spatial.transform import Rotation as R
-import torch
 from ml_collections import ConfigDict
+# from src.controllers.sim2sim import adaptive_controller_numpy, AdaptiveController
+from src.controllers.adaptive_controller import AdaptiveController
 from src.robots.sim2sim.go1 import Go1
 from src.robots.sim2sim.motors import MotorControlMode
 from src.controllers.sim2sim import phase_gait_generator_numpy, raibert_swing_leg_controller_numpy, qp_torque_optimizer_numpy
+import torch
+import pinocchio as pin
 
 class cmd:
     vx = 0.4
@@ -127,17 +130,26 @@ class Sim2sim:
                 self._robot, self._gait_generator, foot_height=self.cfg.swing_foot_height, 
                 foot_landing_clearance=self.cfg.swing_foot_landing_clearance)
         
-        self._torque_optimizer = qp_torque_optimizer_numpy.QPTorqueOptimizer(
-            self._robot,
-            base_position_kp=self.cfg.get('base_position_kp', np.array([0., 0., 50.])),
-            base_position_kd=self.cfg.get('base_position_kd', np.array([10., 10., 10.])),
-            base_orientation_kp=self.cfg.get('base_orientation_kp', np.array([50., 50., 0.])),
-            base_orientation_kd=self.cfg.get('base_orientation_kd', np.array([10., 10., 10.])),
-            weight_ddq=self.cfg.get('qp_weight_ddq', np.diag([20.0, 20.0, 5.0, 1.0, 1.0, .2])),
-            foot_friction_coef=self.cfg.get('qp_foot_friction_coef', 0.7),
-            clip_grf=self.cfg.get('clip_grf_in_sim'),
-            body_inertia=self.cfg.get('qp_body_inertia', np.array([0.14, 0.35, 0.35]) * 0.5),
-            use_full_qp=self.cfg.get('use_full_qp', False))
+        # self._torque_optimizer = qp_torque_optimizer_numpy.QPTorqueOptimizer(
+        #     self._robot,
+        #     base_position_kp=self.cfg.get('base_position_kp', np.array([0., 0., 50.])),
+        #     base_position_kd=self.cfg.get('base_position_kd', np.array([10., 10., 10.])),
+        #     base_orientation_kp=self.cfg.get('base_orientation_kp', np.array([50., 50., 0.])),
+        #     base_orientation_kd=self.cfg.get('base_orientation_kd', np.array([10., 10., 10.])),
+        #     weight_ddq=self.cfg.get('qp_weight_ddq', np.diag([20.0, 20.0, 5.0, 1.0, 1.0, .2])),
+        #     foot_friction_coef=self.cfg.get('qp_foot_friction_coef', 0.7),
+        #     clip_grf=self.cfg.get('clip_grf_in_sim'),
+        #     body_inertia=self.cfg.get('qp_body_inertia', np.array([0.14, 0.35, 0.35]) * 0.5),
+        #     use_full_qp=self.cfg.get('use_full_qp', False))
+        
+        self._adaptive_ctrl = AdaptiveController(
+            robot            = self._robot,
+            kp               = self.cfg.get('adaptive_kp',   np.ones(12)*50.0),
+            kd               = self.cfg.get('adaptive_kd',   np.ones(12)*1.0),
+            gamma            = self.cfg.get('adaptive_gamma',np.ones( 1)*10.0),  # e.g. single scalar param
+            lambda_param     = self.cfg.get('adaptive_lambda',np.ones( 1)*5.0),
+            num_robot_params = 1,                                  # how many θ’s you adapt
+            dt               = self._robot.control_timestep)
         
         self._init_yaw = np.zeros((self.num_envs,))
         self._steps_count = np.zeros((self.num_envs,))
@@ -227,74 +239,87 @@ class Sim2sim:
         
         return self._obs_buf
     
-    def step(self,action):
+    def wrapToPi(self, x):
+        return np.remainder(x + np.pi, 2 * np.pi) - np.pi
+
+    def step(self, action):
         action = self._denormalize_action(action)
-       
-        self._last_action = action.copy()
         action = np.clip(action, self._actions_lb, self._actions_ub)
-        zero = np.zeros((self.num_envs,))
         gait_action, com_action, foot_action = self._split_action(action)
-        
-        desired_linear_vel_z = (com_action[:, 2] -
-                                 self._torque_optimizer.desired_base_position[:, 2]
-                                 ) / self.cfg.env_dt
-        desired_linear_vel_z = desired_linear_vel_z.clip(min=-0., max=0.)
-        desired_ang_vel_y = (com_action[:, 4] -
-                             self._torque_optimizer.desired_base_orientation_rpy[:, 1]
-                             ) / self.cfg.env_dt
-        desired_ang_vel_y = desired_ang_vel_y.clip(min=-0., max=0.)
-        
-        for step in range(
-            max(int(self.cfg.env_dt / self._robot.control_timestep), 1)):
+        zero = np.zeros((self.num_envs,))
+
+        n_substeps = max(int(self.cfg.env_dt / self._robot.control_timestep), 1)
+        for _ in range(n_substeps):
             self._gait_generator.update()
             self._swing_leg_controller.update()
             if gait_action is not None:
                 self._gait_generator.stepping_frequency = gait_action[:, 0]
-            self._torque_optimizer.desired_base_position = np.stack(
-                (self._robot.base_position[:, 0], self._robot.base_position[:, 1],
-                 com_action[:, 0]),
-                axis=1)
-            self._torque_optimizer.desired_linear_velocity = np.stack(
-                (com_action[:, 1], com_action[:, 2] * 0, com_action[:, 3]), axis=1)
-            self._torque_optimizer.desired_base_orientation_rpy = np.stack(
-                (com_action[:, 4] * 0, com_action[:, 5],
-                 self._robot.base_orientation_rpy[:, 2]),
-                 axis=1)
-            if self.cfg.get('use_yaw_feedback', False):
-                yaw_err = (self._init_yaw - self._robot.base_orientation_rpy[:, 2])
-                yaw_err = np.remainder(yaw_err + 3 * np.pi, 2 * np.pi) - np.pi
-                desired_yaw_rate = 1 * yaw_err
-                self._torque_optimizer.desired_angular_velocity = np.stack(
-                    (zero, com_action[:, 6], desired_yaw_rate), axis=1)
-            else:
-                self._torque_optimizer.desired_angular_velocity = np.stack(
-                    (zero, com_action[:, 6], com_action[:, 7] * 0), axis=1)
-            desired_foot_positions = self._swing_leg_controller.desired_foot_positions
-            
+
+            base_z       = self._robot.base_position[:, 2]
+            base_vz      = self._robot.base_velocity_body_frame[:, 2]
+            pitch        = self._robot.base_orientation_rpy[:, 1]
+            yaw          = self._robot.base_orientation_rpy[:, 2]
+            omega_y      = self._robot.base_angular_velocity_body_frame[:, 1]
+
+            z_err       = com_action[:, 0] - base_z
+            zdot_err    = com_action[:, 2] - base_vz
+            vert_acc    = self.cfg.base_kp_z * z_err + self.cfg.base_kd_z * zdot_err
+
+            pitch_err   = com_action[:, 5] - pitch
+            pdot_err    = com_action[:, 6] - omega_y
+            pitch_acc   = self.cfg.base_kp_pitch * pitch_err + self.cfg.base_kd_pitch * pdot_err
+
+            desired_yaw      = yaw.copy()
+            desired_yaw_rate = zero.copy()
+            if self.cfg.get("use_yaw_feedback", False):
+                raw        = com_action[:, 7] - yaw
+                yaw_err    = (raw + np.pi) % (2 * np.pi) - np.pi
+                desired_yaw      = yaw + yaw_err
+                desired_yaw_rate = yaw_err
+
+            desired_foot_positions = self._swing_leg_controller.desired_foot_positions.copy()
             if foot_action is not None:
-                base_yaw = self._robot.base_orientation_rpy[:, 2]
-                cos_yaw = np.cos(base_yaw)[:, None]
-                sin_yaw = np.sin(base_yaw)[:, None]
-                foot_action_world = foot_action.copy()
-                foot_action_world[:, :, 0] = (cos_yaw * foot_action[:, :, 0] -
-                                              sin_yaw * foot_action[:, :, 1])
-                foot_action_world[:, :, 1] = (sin_yaw * foot_action[:, :, 0] +
-                                                cos_yaw * foot_action[:, :, 1])
-                desired_foot_positions += foot_action_world
-            
-            motor_action, self._desired_acc, self._solved_acc, self._qp_cost, self._num_clips = self._torque_optimizer.get_action(
-                self._gait_generator.desired_contact_state,
-                swing_foot_position=desired_foot_positions)
-            # print("motor_action")
-            # print(motor_action)
-            # exit()
-            self._robot.step(motor_action)
+                cosy = np.cos(yaw)[:, None]
+                siny = np.sin(yaw)[:, None]
+                fw   = foot_action.copy()
+                fw[:, :, 0] =  cosy * foot_action[:, :, 0] - siny * foot_action[:, :, 1]
+                fw[:, :, 1] =  siny * foot_action[:, :, 0] + cosy * foot_action[:, :, 1]
+                desired_foot_positions += fw
+
+            q_joints_np = self._robot.get_motor_angles_from_foot_positions(
+                desired_foot_positions)
+            q_joints    = torch.from_numpy(q_joints_np).float()
+            qd_joints   = torch.zeros_like(q_joints)
+
+            B = self.num_envs
+            q_ref   = torch.zeros(B, 18)
+            qd_ref  = torch.zeros(B, 18)
+            qdd_ref = torch.zeros(B, 18)
+
+            q_ref[:, 2]   = torch.from_numpy(com_action[:, 0])
+            qd_ref[:, 2]  = torch.from_numpy(com_action[:, 2])
+            qdd_ref[:, 2] = torch.from_numpy(vert_acc)
+
+            q_ref[:, 4]   = torch.from_numpy(com_action[:, 5])
+            qd_ref[:, 4]  = torch.from_numpy(com_action[:, 6])
+            qdd_ref[:, 4] = torch.from_numpy(pitch_acc)
+
+            q_ref[:, 5]   = torch.from_numpy(desired_yaw)
+            qd_ref[:, 5]  = torch.from_numpy(desired_yaw_rate)
+
+            q_ref[:, 6:]  = q_joints
+            qd_ref[:, 6:] = qd_joints
+            # leave qdd_ref[:,6:] = 0
+
+            motor_torques = self._adaptive_ctrl.get_action(q_ref, qd_ref, qdd_ref)
+
+            self._robot.step(motor_torques)
+
             self._obs_buf = self.get_obs()
-            new_cycle_count = np.floor(self._gait_generator.true_phase / (2 * np.pi)).astype(np.int64)
-            finished_cycle = new_cycle_count > self._cycle_count
-            env_ids_to_resample = np.nonzero(finished_cycle)[0].flatten()
-            self._resample_command(env_ids_to_resample)
-            self._cycle_count = new_cycle_count
+            new_cycles  = np.floor(self._gait_generator.true_phase / (2 * np.pi)).astype(int)
+            done_envs   = np.where(new_cycles > self._cycle_count)[0]
+            self._resample_command(done_envs)
+            self._cycle_count = new_cycles
 
         return self._normalize_obs(self._obs_buf)
         
@@ -410,8 +435,12 @@ if __name__ == '__main__':
         cfg.foot_friction = [1., 1., 1., 1.]  #0.7
         cfg.base_position_kp = np.array([0., 0., 0.])
         cfg.base_position_kd = np.array([10., 10., 10.])
+        cfg.base_kp_z = cfg.base_position_kp[2]
+        cfg.base_kd_z = cfg.base_position_kd[2]
         cfg.base_orientation_kp = np.array([50., 0., 0.])
         cfg.base_orientation_kd = np.array([10., 10., 10.])
+        cfg.base_kp_pitch = cfg.base_orientation_kp[1]
+        cfg.base_kd_pitch = cfg.base_orientation_kd[1]
         cfg.qp_foot_friction_coef = 0.6
         cfg.qp_weight_ddq = np.diag([1., 1., 10., 10., 10., 1.])
         cfg.qp_body_inertia = np.array([0.14, 0.35, 0.35]) * 1.5
