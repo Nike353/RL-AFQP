@@ -438,12 +438,9 @@ class QPTorqueOptimizer:
     
      # --- Adaptive Parameters ---
     self.mass_hat = np.full((self._num_envs,), np.array(body_mass, dtype=np.float32))
-    # Assuming inertia_hat stores diagonal elements for simplicity, or full 3x3 if needed
-    # For sim2sim (num_envs=1), this will be a single 3x3 matrix or a (3,) vector.
     self.inertia_hat = np.stack([np.diag(np.array(body_inertia, dtype=np.float32))] * self._num_envs, axis=0)
     self.friction_coef_hat = np.full((self._num_envs,), np.array(foot_friction_coef, dtype=np.float32))
 
-    # Store these as they will be updated by adaptive logic
     self._inv_mass_adaptive = np.stack([np.eye(3, dtype=np.float32) / self.mass_hat[i] for i in range(self._num_envs)], axis=0)
     self._inv_inertia_adaptive = np.stack([np.linalg.inv(self.inertia_hat[i]) for i in range(self._num_envs)], axis=0)
     self._foot_friction_coef_adaptive = self.friction_coef_hat.copy()
@@ -454,22 +451,20 @@ class QPTorqueOptimizer:
         adaptive_gains = default_gains
 
     self.gamma_mass = np.array(adaptive_gains.get('gamma_mass', default_gains['gamma_mass']), dtype=np.float32)
-    self.gamma_inertia_diag = np.array(adaptive_gains.get('gamma_inertia_diag', default_gains['gamma_inertia_diag']), dtype=np.float32) # For diagonal elements
+    self.gamma_inertia_diag = np.array(adaptive_gains.get('gamma_inertia_diag', default_gains['gamma_inertia_diag']), dtype=np.float32)
     self.gamma_friction = np.array(adaptive_gains.get('gamma_friction', default_gains['gamma_friction']), dtype=np.float32)
 
-    # For calculating measured acceleration via finite differences
     self.prev_base_lin_vel_body = np.zeros((self._num_envs, 3), dtype=np.float32)
     self.prev_base_ang_vel_body = np.zeros((self._num_envs, 3), dtype=np.float32)
 
   def _update_estimates(self, desired_acc_body_frame, solved_acc_body_frame, grf_body_frame, foot_contact_state):
-      # For num_envs = 1 (typical for sim2sim numpy)
-      env_idx = 0 # Assuming single environment for numpy version
+      env_idx = 0
 
-      # 1. Calculate/Measure actual base acceleration (world or body frame)
+
       current_lin_vel_body = self._robot.base_velocity_body_frame[env_idx]
       current_ang_vel_body = self._robot.base_angular_velocity_body_frame[env_idx]
 
-      # Measured acceleration (simple finite difference, consider filtering for robustness)
+      # Measured acceleration (simple finite difference)
       measured_lin_acc_body = (current_lin_vel_body - self.prev_base_lin_vel_body[env_idx]) / self._dt
       measured_ang_acc_body = (current_ang_vel_body - self.prev_base_ang_vel_body[env_idx]) / self._dt
 
@@ -477,7 +472,6 @@ class QPTorqueOptimizer:
       self.prev_base_ang_vel_body[env_idx] = current_ang_vel_body.copy()
 
       # Error signal for mass/inertia: e_acc = measured_acc - solved_acc
-      # solved_acc_body_frame is the acceleration the QP's model predicted with its GRFs.
       e_lin_acc = measured_lin_acc_body - solved_acc_body_frame[env_idx, :3]
       e_ang_acc = measured_ang_acc_body - solved_acc_body_frame[env_idx, 3:]
 
@@ -491,7 +485,7 @@ class QPTorqueOptimizer:
       # Force error drives mass update:  f_tot_z ≈ m_hat*(meas_acc_z+g_z)
       error_force_z = f_tot_z - self.mass_hat[env_idx] * (meas_acc_z + g_z_body)
       self.mass_hat[env_idx] += self.gamma_mass * error_force_z * self._dt
-      # clamp to physical bounds
+      # clamp to bounds
       self.mass_hat[env_idx] = np.clip(self.mass_hat[env_idx], 5.0, 25.0)
 
       # --- Inertia Adaptation (diagonal elements for simplicity) ---
@@ -524,21 +518,19 @@ class QPTorqueOptimizer:
                   
                   if foot_speed_sq > IS_SLIPPING_THRESHOLD_SQ:
                       # If slipping, tangential force magnitude should be mu_hat * N
-                      current_mu_at_contact = F_tangential_mag_i / (N_i + 1e-6) # Add epsilon for stability
+                      current_mu_at_contact = F_tangential_mag_i / (N_i + 1e-6) # Adding epsilon for stability
                       delta_friction = self.gamma_friction * (current_mu_at_contact - self.friction_coef_hat[env_idx])
                       self.friction_coef_hat[env_idx] = np.clip(self.friction_coef_hat[env_idx] + delta_friction * self._dt, 0.1, 1.5)
 
-      # Update the cached adaptive parameters for the QP
+      # Update the stored adaptive parameters for the QP
       self._inv_mass_adaptive[env_idx] = np.eye(3, dtype=np.float32) / self.mass_hat[env_idx]
       self._inv_inertia_adaptive[env_idx] = np.linalg.inv(self.inertia_hat[env_idx])
       self._foot_friction_coef_adaptive[env_idx] = self.friction_coef_hat[env_idx]
 
 
   def _solve_joint_torques_adaptive(self, foot_contact_state, desired_com_ddq):
-    # Uses self._inv_mass_adaptive, self._inv_inertia_adaptive, self._foot_friction_coef_adaptive
-    # which are updated by _update_estimates
 
-    mass_mat_adaptive = construct_mass_mat( # construct_mass_mat needs to take inv_mass and inv_inertia
+    mass_mat_adaptive = construct_mass_mat(
         self._robot.foot_positions_in_base_frame, # Shape (num_envs, 4, 3)
         foot_contact_state,                       # Shape (num_envs, 4)
         self._inv_mass_adaptive,                  # Shape (num_envs, 3, 3)
@@ -546,12 +538,9 @@ class QPTorqueOptimizer:
         mask_noncontact_legs=not self._use_full_qp
     )
 
-    # Ensure friction coefficient is correctly shaped for solve_grf/solve_grf_qpth
-    # If solve_grf expects a scalar and num_envs is 1, pass self._foot_friction_coef_adaptive[0]
     friction_coeff_for_solver = self._foot_friction_coef_adaptive[0] if self._num_envs == 1 else self._foot_friction_coef_adaptive
 
     if self._use_full_qp:
-        # solve_grf_qpth needs to be compatible with numpy and potentially per-env friction_coef
         grf, solved_acc, qp_cost, num_clips = solve_grf_qpth(
             mass_mat_adaptive,
             desired_com_ddq,
@@ -563,7 +552,6 @@ class QPTorqueOptimizer:
             foot_contact_state
         )
     else:
-        # solve_grf needs to be compatible with numpy and potentially per-env friction_coef
         grf, solved_acc, qp_cost, num_clips = solve_grf(
             mass_mat_adaptive,
             desired_com_ddq,
@@ -576,7 +564,6 @@ class QPTorqueOptimizer:
         )
 
     all_foot_jacobian = self._robot.all_foot_jacobian # Shape (num_envs, 12, 12)
-    # grf is (num_envs, 12)
     motor_torques = -np.matmul(grf[:, np.newaxis, :], all_foot_jacobian)[:, 0, :]
     return motor_torques, solved_acc, grf, qp_cost, num_clips
 
@@ -657,19 +644,18 @@ class QPTorqueOptimizer:
     ), desired_acc_body_frame, solved_acc, qp_cost, num_clips
 
   def get_action(self, foot_contact_state: np.ndarray, swing_foot_position: np.ndarray):
-    # 1. Compute desired base accelerations (PD part for base)
-    # This part remains largely the same, using current robot state and desired base poses/velocities
+    # Compute desired base accelerations (PD part for base)
     desired_acc_body_frame = compute_desired_acc(
         self._robot.base_orientation_rpy,
         self._robot.base_position,
         self._robot.base_angular_velocity_body_frame,
         self._robot.base_velocity_body_frame,
-        self.desired_base_orientation_rpy, # Property uses self._desired_base_orientation_rpy
-        self.desired_base_position,    # Property
-        self.desired_angular_velocity, # Property
-        self.desired_linear_velocity,  # Property
-        self._desired_angular_acceleration, # Direct attribute
-        self._desired_linear_acceleration,  # Direct attribute
+        self.desired_base_orientation_rpy,
+        self.desired_base_position,
+        self.desired_angular_velocity,
+        self.desired_linear_velocity,
+        self._desired_angular_acceleration,
+        self._desired_linear_acceleration,
         self._base_position_kp,
         self._base_position_kd,
         self._base_orientation_kp,
@@ -681,19 +667,16 @@ class QPTorqueOptimizer:
         np.array([30, 30, 30, 20, 20, 20], dtype=np.float32)
     )
 
-    # 2. Solve QP using current adaptive estimates
-    # _solve_joint_torques_adaptive will use self._inv_mass_adaptive etc.
+    # Solve QP using current adaptive estimates
     motor_torques, solved_acc, grf, qp_cost, num_clips = self._solve_joint_torques_adaptive(
         foot_contact_state,
         desired_acc_body_frame
     )
 
-    # 3. Update estimates based on the outcome
-    # solved_acc is from the QP model, grf is also from QP (in body frame)
+    # Update estimates based on the outcome
     self._update_estimates(desired_acc_body_frame, solved_acc, grf, foot_contact_state)
 
-    # 4. Compute final motor command (IK for swing legs, torques for stance legs)
-    # This logic is similar to the original get_action
+    # Compute final motor command (IK for swing legs, torques for stance legs)
     foot_position_local = np.matmul(self._robot.base_rot_mat_t,
                                 swing_foot_position.transpose(0, 2, 1)).transpose(0, 2, 1)
     foot_position_local[:, :, 2] = np.clip(foot_position_local[:, :, 2], -0.35, -0.1)
@@ -715,9 +698,9 @@ class QPTorqueOptimizer:
     # Construct MotorCommand
     # The kp and kd here are for joint-level PD control.
     # The QP torques act as feedforward for stance legs.
-    # Swing legs will primarily follow desired_position via these Kp/Kd.
-    kp_joint = np.ones_like(self._robot.motor_group.kps) * 50 # Example Kp for joint tracking
-    kd_joint = np.ones_like(self._robot.motor_group.kds) * 1.0  # Example Kd for joint tracking
+    # Swing legs will primarily follow desired_position via these Kp/Kd
+    kp_joint = np.ones_like(self._robot.motor_group.kps) * 50
+    kd_joint = np.ones_like(self._robot.motor_group.kds) * 1.0
 
     # For swing legs, desired_extra_torque is zero, PD terms will generate torque.
     # For stance legs, desired_position/velocity match current, so PD terms are small,
@@ -732,7 +715,6 @@ class QPTorqueOptimizer:
 
     return motor_command_obj, desired_acc_body_frame, solved_acc, qp_cost, num_clips
 
-  # Ensure all property setters handle numpy arrays correctly if their types were changed
   @property
   def desired_base_position(self) -> np.ndarray:
       return self._desired_base_position
