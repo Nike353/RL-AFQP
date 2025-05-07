@@ -127,6 +127,13 @@ class Sim2sim:
                 self._robot, self._gait_generator, foot_height=self.cfg.swing_foot_height, 
                 foot_landing_clearance=self.cfg.swing_foot_landing_clearance)
         
+        adaptive_gains = {
+            'gamma_mass': 0.05,       # Tune these
+            'gamma_inertia_diag': 0.02, # Tune these
+            'gamma_friction': 0.1     # Tune these
+        }
+
+        
         self._torque_optimizer = qp_torque_optimizer_numpy.QPTorqueOptimizer(
             self._robot,
             base_position_kp=self.cfg.get('base_position_kp', np.array([0., 0., 50.])),
@@ -137,7 +144,9 @@ class Sim2sim:
             foot_friction_coef=self.cfg.get('qp_foot_friction_coef', 0.7),
             clip_grf=self.cfg.get('clip_grf_in_sim'),
             body_inertia=self.cfg.get('qp_body_inertia', np.array([0.14, 0.35, 0.35]) * 0.5),
-            use_full_qp=self.cfg.get('use_full_qp', False))
+            use_full_qp=self.cfg.get('use_full_qp', False),
+            adaptive_gains=adaptive_gains,
+            dt = self.sim_config.dt)
         
         self._init_yaw = np.zeros((self.num_envs,))
         self._steps_count = np.zeros((self.num_envs,))
