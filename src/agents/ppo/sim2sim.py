@@ -40,7 +40,7 @@ from src.robots.sim2sim.go1 import Go1
 from src.robots.sim2sim.motors import MotorControlMode
 # from src.controllers.sim2sim import phase_gait_generator_numpy, raibert_swing_leg_controller_numpy, qp_torque_optimizer_numpy
 from src.controllers.sim2sim import phase_gait_generator_numpy, raibert_swing_leg_controller_numpy
-from src.controllers.sim2sim.l1_torque_optimizer_numpy import L1TorqueOptimizer
+from src.controllers.sim2sim.mpc_torque_optimizer_numpy import L1AdaptiveMPCTorqueOptimizer
 
 class cmd:
     vx = 0.4
@@ -128,53 +128,47 @@ class Sim2sim:
         self._swing_leg_controller = raibert_swing_leg_controller_numpy.RaibertSwingLegController(
                 self._robot, self._gait_generator, foot_height=self.cfg.swing_foot_height, 
                 foot_landing_clearance=self.cfg.swing_foot_landing_clearance)
-        
-        # self._torque_optimizer = qp_torque_optimizer_numpy.QPTorqueOptimizer(
-        #     self._robot,
-        #     base_position_kp=self.cfg.get('base_position_kp', np.array([0., 0., 50.])),
-        #     base_position_kd=self.cfg.get('base_position_kd', np.array([10., 10., 10.])),
-        #     base_orientation_kp=self.cfg.get('base_orientation_kp', np.array([50., 50., 0.])),
-        #     base_orientation_kd=self.cfg.get('base_orientation_kd', np.array([10., 10., 10.])),
-        #     weight_ddq=self.cfg.get('qp_weight_ddq', np.diag([20.0, 20.0, 5.0, 1.0, 1.0, .2])),
-        #     foot_friction_coef=self.cfg.get('qp_foot_friction_coef', 0.7),
-        #     clip_grf=self.cfg.get('clip_grf_in_sim'),
-        #     body_inertia=self.cfg.get('qp_body_inertia', np.array([0.14, 0.35, 0.35]) * 0.5),
-        #     use_full_qp=self.cfg.get('use_full_qp', False))
-        adaptive_gains = {
-            # Mass adaptation gain: how fast you want m̂ to track a change in payload.
-            # 0.01–0.1 works well; too high → oscillations, too low → sluggish.
-            'gamma_mass': 0.05,
-
-            # Inertia (diagonal) gain: how fast Îxx, Îyy, Îzz adapt.
-            # Often smaller than mass—try 0.01–0.05.
-            'gamma_inertia_diag': 0.02,
-
-            # Friction gain: how aggressively you update μ̂ when slip is detected.
-            # You want this moderately fast (but not noise‑driven): 0.05–0.2 is typical.
-            'gamma_friction': 0.10
-            }
-        
-        self._torque_optimizer = L1TorqueOptimizer(
-                self._robot,
-                qp_kwargs={
-                'base_position_kp': self.cfg.get('base_position_kp', np.array([0.,0.,50.])),
-                'base_position_kd': self.cfg.get('base_position_kd', np.array([10.,10.,10.])),
-                'base_orientation_kp': self.cfg.get('base_orientation_kp', np.array([50.,50.,0.])),
-                'base_orientation_kd': self.cfg.get('base_orientation_kd', np.array([10.,10.,10.])),
-                'weight_ddq': self.cfg.get('qp_weight_ddq', np.diag([20.,20.,5.,1.,1.,.2])),
-                'foot_friction_coef': self.cfg.get('qp_foot_friction_coef', 0.7),
-                'clip_grf': self.cfg.get('clip_grf_in_sim'),
-                'body_inertia': self.cfg.get('qp_body_inertia', np.array([0.14,0.35,0.35])*0.5),
-                'use_full_qp': self.cfg.get('use_full_qp', False),
-                'dt': self.sim_config.dt
-                },
-                l1_kwargs={
-                'observer_gain': np.eye(6)*50,    # tune for eigenvalues of (−L)
-                'adapt_gain': 10.0,               # Γ
-                'filter_cutoff': 15.0,            # ω_c (Hz)
-                'dt': self.sim_config.dt
-                }
-            )
+              
+        # self._torque_optimizer = L1TorqueOptimizer(
+        #         self._robot,
+        #         qp_kwargs={
+        #         'base_position_kp': self.cfg.get('base_position_kp', np.array([0.,0.,50.])),
+        #         'base_position_kd': self.cfg.get('base_position_kd', np.array([10.,10.,10.])),
+        #         'base_orientation_kp': self.cfg.get('base_orientation_kp', np.array([50.,50.,0.])),
+        #         'base_orientation_kd': self.cfg.get('base_orientation_kd', np.array([10.,10.,10.])),
+        #         'weight_ddq': self.cfg.get('qp_weight_ddq', np.diag([20.,20.,5.,1.,1.,.2])),
+        #         'foot_friction_coef': self.cfg.get('qp_foot_friction_coef', 0.7),
+        #         'clip_grf': self.cfg.get('clip_grf_in_sim'),
+        #         'body_inertia': self.cfg.get('qp_body_inertia', np.array([0.14,0.35,0.35])*0.5),
+        #         'use_full_qp': self.cfg.get('use_full_qp', False),
+        #         'dt': self.sim_config.dt
+        #         },
+        #         l1_kwargs={
+        #         'observer_gain': np.eye(6)*50,    # tune for eigenvalues of (−L)
+        #         'adapt_gain': 50.0,               # Γ
+        #         'filter_cutoff': 25.0,            # ω_c (Hz)
+        #         'dt': self.sim_config.dt
+        #         }
+        #     )
+        self._torque_optimizer = L1AdaptiveMPCTorqueOptimizer(
+            self._robot,
+            qp_kwargs={
+            'base_position_kp': self.cfg.get('base_position_kp', np.array([0.,0.,50.])),
+            'base_position_kd': self.cfg.get('base_position_kd', np.array([10.,10.,10.])),
+            'base_orientation_kp': self.cfg.get('base_orientation_kp', np.array([50.,50.,0.])),
+            'base_orientation_kd': self.cfg.get('base_orientation_kd', np.array([10.,10.,10.])),
+            'weight_ddq': self.cfg.get('qp_weight_ddq', np.diag([20.,20.,5.,1.,1.,.2])),
+            'foot_friction_coef': self.cfg.get('qp_foot_friction_coef', 0.7),
+            'clip_grf': self.cfg.get('clip_grf_in_sim'),
+            'body_inertia': self.cfg.get('qp_body_inertia', np.array([0.14,0.35,0.35])*0.5),
+            'use_full_qp': self.cfg.get('use_full_qp', False),
+            'dt': self.sim_config.dt
+            },
+            mpc_horizon=10,
+            l1_kwargs={ 'dt':self.sim_config.dt,
+            'observer_gain': np.eye(6)*150,
+            'adapt_gain':    np.eye(6)*5,
+            'filter_cutoff': 30.0 })
         
         self._init_yaw = np.zeros((self.num_envs,))
         self._steps_count = np.zeros((self.num_envs,))
