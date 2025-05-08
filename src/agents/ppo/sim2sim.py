@@ -129,30 +129,8 @@ class Sim2sim:
                 self._robot, self._gait_generator, foot_height=self.cfg.swing_foot_height, 
                 foot_landing_clearance=self.cfg.swing_foot_landing_clearance)
         
-        # self._torque_optimizer = qp_torque_optimizer_numpy.QPTorqueOptimizer(
-        #     self._robot,
-        #     base_position_kp=self.cfg.get('base_position_kp', np.array([0., 0., 50.])),
-        #     base_position_kd=self.cfg.get('base_position_kd', np.array([10., 10., 10.])),
-        #     base_orientation_kp=self.cfg.get('base_orientation_kp', np.array([50., 50., 0.])),
-        #     base_orientation_kd=self.cfg.get('base_orientation_kd', np.array([10., 10., 10.])),
-        #     weight_ddq=self.cfg.get('qp_weight_ddq', np.diag([20.0, 20.0, 5.0, 1.0, 1.0, .2])),
-        #     foot_friction_coef=self.cfg.get('qp_foot_friction_coef', 0.7),
-        #     clip_grf=self.cfg.get('clip_grf_in_sim'),
-        #     body_inertia=self.cfg.get('qp_body_inertia', np.array([0.14, 0.35, 0.35]) * 0.5),
-        #     use_full_qp=self.cfg.get('use_full_qp', False))
-        adaptive_gains = {
-            # Mass adaptation gain: how fast you want m̂ to track a change in payload.
-            # 0.01–0.1 works well; too high → oscillations, too low → sluggish.
-            'gamma_mass': 0.05,
-
-            # Inertia (diagonal) gain: how fast Îxx, Îyy, Îzz adapt.
-            # Often smaller than mass—try 0.01–0.05.
-            'gamma_inertia_diag': 0.02,
-
-            # Friction gain: how aggressively you update μ̂ when slip is detected.
-            # You want this moderately fast (but not noise‑driven): 0.05–0.2 is typical.
-            'gamma_friction': 0.10
-            }
+        # L = np.diag([10, 10, 10, 150, 150, 150])
+        L = np.diag([75, 75, 150, 50, 50, 50])
         
         self._torque_optimizer = L1TorqueOptimizer(
                 self._robot,
@@ -169,8 +147,8 @@ class Sim2sim:
                 'dt': self.sim_config.dt
                 },
                 l1_kwargs={
-                'observer_gain': np.eye(6)*50,    # tune for eigenvalues of (−L)
-                'adapt_gain': 10.0,               # Γ
+                'observer_gain': L,    # tune for eigenvalues of (−L)
+                'adapt_gain': 1.0,               # Γ
                 'filter_cutoff': 15.0,            # ω_c (Hz)
                 'dt': self.sim_config.dt
                 }
