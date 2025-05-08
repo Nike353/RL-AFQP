@@ -396,7 +396,8 @@ class QPTorqueOptimizer:
                desired_body_height=0.26,
                foot_friction_coef=0.7,
                clip_grf=False,
-               use_full_qp=False):
+               use_full_qp=False,
+               dt=0.001):
     """Initializes the controller with desired weights and gains."""
     self._robot = robot
     self._num_envs = self._robot.num_envs
