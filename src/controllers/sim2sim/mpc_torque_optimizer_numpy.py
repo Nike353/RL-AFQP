@@ -36,6 +36,7 @@ class L1AdaptiveMPCTorqueOptimizer:
         self.Gamma   = l1_kwargs['adapt_gain']    # e.g. 0.01 or small scalar
         self.omega_c = l1_kwargs['filter_cutoff']
         self.max_d   = l1_kwargs.get('max_adapt', np.ones(6, dtype=np.float32) * 5.0)
+        self.tau_scale = l1_kwargs.get('tau_scale', 0.1)
         self._build_l1_states()
         self._setup_osqp_templates()
 
@@ -47,7 +48,7 @@ class L1AdaptiveMPCTorqueOptimizer:
 
     def _setup_osqp_templates(self):
         # Hessian for OSQP: block-diagonal Rw per time step
-        Rw = sparse.eye(12) * 1e-4
+        Rw = sparse.eye(12) * 1e-2
         self.P = sparse.block_diag([Rw]*self.N).tocsc()
 
         # Friction cone constraints: 4 inequalities per foot per step
@@ -126,6 +127,7 @@ class L1AdaptiveMPCTorqueOptimizer:
         # 6) Map foot forces to joint torques
         J = self._qp._robot.all_foot_jacobian[0]  # (12×12)
         tau = -J.T.dot(f0)
+        tau = tau * self.tau_scale
 
         from src.robots.sim2sim.motors import MotorCommand
         return MotorCommand(mc.desired_position, mc.kp, mc.desired_velocity, mc.kd, tau), corr, None, None, None
