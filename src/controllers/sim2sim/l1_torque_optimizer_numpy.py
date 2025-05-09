@@ -2,9 +2,9 @@ import numpy as np
 from src.controllers.sim2sim.qp_torque_optimizer_numpy import QPTorqueOptimizer, convert_to_skew_symmetric_batch
 
 class L1TorqueOptimizer:
-    """Wraps QPTorqueOptimizer with an L1 adaptive loop."""
+    """QPTorqueOptimizer with an L1 adaptive loop."""
     def __init__(self, robot, qp_kwargs: dict, l1_kwargs: dict):
-        # Nominal QP solver from CAJun
+        # QP solver from CAJun
         import inspect
         sig = inspect.signature(QPTorqueOptimizer.__init__).parameters
         qp_args = {k: v for k, v in qp_kwargs.items() if k in sig}
@@ -16,7 +16,7 @@ class L1TorqueOptimizer:
         self.Gamma = l1_kwargs['adapt_gain']     # adaptation rate
         self.omega_c = l1_kwargs['filter_cutoff']
 
-        # Build B matrix: maps 12D GRFs -> 6D wrench
+        # B matrix: maps 12D GRFs -> 6D wrench
         inv_mass = self._qp._inv_mass         # (3x3)
         inv_inertia = self._qp._inv_inertia   # (3x3)
         p = robot.foot_positions_in_base_frame[0]  # (4x3)
@@ -25,13 +25,13 @@ class L1TorqueOptimizer:
         B_ang = inv_inertia.dot(px)                           # (3x12)
         self.B = np.vstack([B_lin, B_ang])                    # (6x12)
 
-        # Internal states
+        # states
         self.x_hat = np.zeros(6, dtype=np.float32)
         self.d_hat = np.zeros(6, dtype=np.float32)
         self.filt_buf = np.zeros(6, dtype=np.float32)
         self.u_ref = np.zeros(6, dtype=np.float32)
 
-        # For finite-difference accel
+        # finite-difference accel
         self.prev_lin_vel = robot.base_velocity_body_frame.copy()
         self.prev_ang_vel = robot.base_angular_velocity_body_frame.copy()
 
@@ -52,15 +52,14 @@ class L1TorqueOptimizer:
         # y_meas is the measured centroidal acceleration [ddot_v_meas; ddot_omega_meas]
         # self.L is the observer gain matrix (6x6)
 
-        # Retrieve components of the inverse inertia matrix M_c
-        # In your QPTorqueOptimizer:
+        # components of the inverse inertia matrix M_c
         # self._inv_mass is m^-1 * np.eye(3)
         # self._inv_inertia is I_body_inv (the 3x3 inverse inertia tensor in the body frame)
         inv_mass_matrix_3x3 = self._qp._inv_mass
         inv_inertia_matrix_3x3 = self._qp._inv_inertia
 
-        F_ref = self.u_ref[:3]  # Linear forces from reference wrench
-        M_ref = self.u_ref[3:]  # Torques from reference wrench
+        F_ref = self.u_ref[:3]  # forces from reference wrench
+        M_ref = self.u_ref[3:]  # torques from reference wrench
 
         # Convert reference wrench u_ref to reference acceleration (effectively M_c * u_ref)
         # Linear acceleration = (1/m) * F_ref
@@ -71,7 +70,7 @@ class L1TorqueOptimizer:
         # Concatenate to get the 6D reference acceleration vector
         accel_from_uref = np.concatenate([accel_from_F_ref, angular_accel_from_M_ref])
 
-        # Now, all terms are accelerations: M_c*u_ref + d_hat (estimated acceleration disturbance)
+        # all terms are accelerations: M_c*u_ref + d_hat (estimated acceleration disturbance)
         model_predicted_accel = accel_from_uref + self.d_hat
 
         # Full predictor equation for the rate of change of the acceleration estimate (xdot = d(self.x_hat)/dt)

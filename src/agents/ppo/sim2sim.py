@@ -130,7 +130,7 @@ class Sim2sim:
                 foot_landing_clearance=self.cfg.swing_foot_landing_clearance)
         
         # L = np.diag([10, 10, 10, 150, 150, 150])
-        L = np.diag([75, 75, 150, 50, 50, 50])
+        L = np.diag([150, 150, 150, 50, 10, 50])
         
         self._torque_optimizer = L1TorqueOptimizer(
                 self._robot,
@@ -148,8 +148,8 @@ class Sim2sim:
                 },
                 l1_kwargs={
                 'observer_gain': L,    # tune for eigenvalues of (−L)
-                'adapt_gain': 1.0,               # Γ
-                'filter_cutoff': 15.0,            # ω_c (Hz)
+                'adapt_gain': 3.5,               # Γ
+                'filter_cutoff': 50.0,            # ω_c (Hz)
                 'dt': self.sim_config.dt
                 }
             )
