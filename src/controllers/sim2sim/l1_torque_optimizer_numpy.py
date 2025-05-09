@@ -46,8 +46,39 @@ class L1TorqueOptimizer:
         return np.concatenate([F, M], axis=0)
 
     def _predictor(self, y_meas: np.ndarray):
-        # Predictor: xdot = (u_ref + d_hat) + L (y_meas - x_hat)
-        xdot = (self.u_ref + self.d_hat) + self.L.dot(y_meas - self.x_hat)
+        # self.u_ref is a 6D wrench [F; M] (forces and torques)
+        # self.d_hat is a 6D acceleration disturbance [d_ddot_v; d_ddot_omega] (from _adaptation method)
+        # self.x_hat is the estimate of centroidal acceleration [ddot_v_hat; ddot_omega_hat]
+        # y_meas is the measured centroidal acceleration [ddot_v_meas; ddot_omega_meas]
+        # self.L is the observer gain matrix (6x6)
+
+        # Retrieve components of the inverse inertia matrix M_c
+        # In your QPTorqueOptimizer:
+        # self._inv_mass is m^-1 * np.eye(3)
+        # self._inv_inertia is I_body_inv (the 3x3 inverse inertia tensor in the body frame)
+        inv_mass_matrix_3x3 = self._qp._inv_mass
+        inv_inertia_matrix_3x3 = self._qp._inv_inertia
+
+        F_ref = self.u_ref[:3]  # Linear forces from reference wrench
+        M_ref = self.u_ref[3:]  # Torques from reference wrench
+
+        # Convert reference wrench u_ref to reference acceleration (effectively M_c * u_ref)
+        # Linear acceleration = (1/m) * F_ref
+        accel_from_F_ref = inv_mass_matrix_3x3 @ F_ref
+        # Angular acceleration = I_body_inv * M_ref
+        angular_accel_from_M_ref = inv_inertia_matrix_3x3 @ M_ref
+
+        # Concatenate to get the 6D reference acceleration vector
+        accel_from_uref = np.concatenate([accel_from_F_ref, angular_accel_from_M_ref])
+
+        # Now, all terms are accelerations: M_c*u_ref + d_hat (estimated acceleration disturbance)
+        model_predicted_accel = accel_from_uref + self.d_hat
+
+        # Full predictor equation for the rate of change of the acceleration estimate (xdot = d(self.x_hat)/dt)
+        # xdot = (M_c*u_ref + d_hat_accel) + L*(y_meas_accel - x_hat_accel)
+        xdot = model_predicted_accel + self.L @ (y_meas - self.x_hat)
+
+        # Integrate to update the estimate of acceleration
         self.x_hat += xdot * self.dt
 
     def _adaptation(self, y_meas: np.ndarray):
