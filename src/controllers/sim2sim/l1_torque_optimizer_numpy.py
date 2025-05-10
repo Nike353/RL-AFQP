@@ -110,19 +110,14 @@ class L1TorqueOptimizer:
 
 
     def get_action(self, foot_contact_state: np.ndarray, swing_foot_position: np.ndarray):
-        # 1) Nominal QP solve
         mc, desired_acc, solved_acc, qp_cost, num_clips = \
             self._qp.get_action(foot_contact_state, swing_foot_position)
 
-        # 2) Raw GRF
         _, _, grf, _, _ = self._qp._solve_joint_torques(foot_contact_state, desired_acc)
         flat_grf = grf.flatten()
-        # ==== NEW: log raw GRF ====
         self.log['grf_nominal'].append(flat_grf.copy())
-
         self.u_ref = self._extract_wrench(flat_grf)
 
-        # 3) Measure accel
         curr_lin = self._qp._robot.base_velocity_body_frame[0]
         curr_ang = self._qp._robot.base_angular_velocity_body_frame[0]
         meas_lin_acc = (curr_lin - self.prev_lin_vel[0]) / self.dt
@@ -131,38 +126,38 @@ class L1TorqueOptimizer:
         self.prev_ang_vel[0] = curr_ang.copy()
         y_meas = np.concatenate([meas_lin_acc, meas_ang_acc])
 
-        # 4) L1 predictor & adaptation
         self._predictor(y_meas)
         self._adaptation(y_meas)
         delta = self._l1_filter()
-
-        # ==== NEW: log disturbance estimates ====
         self.log['d_hat'].append(self.d_hat.copy())
         self.log['delta'].append(delta.copy())
 
-        # 5) Correct desired_acc
         corrected_acc = desired_acc.copy()
-        corrected_acc[0,:3]  -= delta[:3]
-        corrected_acc[0,3:]  -= delta[3:]
+        corrected_acc[0, :3]  -= delta[:3]
+        corrected_acc[0, 3:]  -= delta[3:]
 
-        # 6) Corrected QP solve
         _, _, grf_corr, _, _ = \
             self._qp._solve_joint_torques(foot_contact_state, corrected_acc)
         flat_grf_corr = grf_corr.flatten()
-        # ==== NEW: log corrected GRF & time ====
         self.log['grf_corrected'].append(flat_grf_corr.copy())
         self.log['time'].append(len(self.log['time']) * self.dt)
 
-        # 7) Return exactly as before
         from src.robots.sim2sim.motors import MotorCommand
+        jac = self._qp._robot.all_foot_jacobian
+        motor_torques_corr = -np.matmul(
+            grf_corr[:, None, :],
+            jac
+        )[0, 0, :]
+
         mc_corrected = MotorCommand(
-            desired_position    = mc.desired_position,
-            kp                  = mc.kp,
-            desired_velocity    = mc.desired_velocity,
-            kd                  = mc.kd,
-            desired_extra_torque= mc.desired_extra_torque  # unchanged
+            desired_position     = mc.desired_position,
+            kp                   = mc.kp,
+            desired_velocity     = mc.desired_velocity,
+            kd                   = mc.kd,
+            desired_extra_torque = motor_torques_corr
         )
         return mc_corrected, corrected_acc, solved_acc, qp_cost, num_clips
+
 
 
     # ---- forwarded properties unchanged ----
