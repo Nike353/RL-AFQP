@@ -79,7 +79,7 @@
       <camera name="tracking" mode="trackcom" pos="0 -1 0.8" xyaxes="1 0 0 0 1 1"/>
       <site name="head" pos="0.3 0 0" rgba="1 0 0 1" size="0.02" group="5"/>
       <inertial pos="0.0223 0.002 -0.0005" quat="-0.00342088 0.705204 0.000106698 0.708996" mass="5.204"
-        diaginertia="0.2716565 0.2630105 0.2168101"/>
+        diaginertia="0.0716565 0.0630105 0.0168101"/>
       <freejoint/>
       <geom class="visual" mesh="trunk"/>
       <geom class="collision" size="0.125 0.04 0.057" type="box"/>

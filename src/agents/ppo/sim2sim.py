@@ -47,6 +47,56 @@ class cmd:
     vy = 0.0
     dyaw = 0.0
 
+class Sim2simCfg:
+    # --- simulation parameters ---
+    sim_config = ConfigDict()
+    sim_config.sim_duration         = 60.0
+    sim_config.dt                   = 0.002
+    sim_config.decimation           = 10
+    sim_config.render               = True
+    sim_config.action_repeat        = 1
+
+    # --- gait generator settings ---
+    gait = ConfigDict()
+    gait.stepping_frequency         = 1
+    gait.initial_offset             = np.zeros(4)*(2*np.pi)
+    gait.swing_ratio                = np.array([0.5,0.5,0.5,0.5])
+
+    # --- high‐level policy bounds ---
+    cfg = ConfigDict()
+    cfg.goal_lb                     = np.array([0.3, 0.])
+    cfg.goal_ub                     = np.array([1. , 0.])
+    cfg.include_gait_action         = True
+    cfg.include_foot_action         = True
+    cfg.mirror_foot_action          = True
+    cfg.action_lb                   = np.array(
+                                        [0.5,  -0.001, -3,    -0.001, -3.,   -0.001, -0.001, -2.5, -0.001]
+                                        + [-0.1, -0.0001,  0.   ] * 2)
+    cfg.action_ub                   = np.array(
+                                        [3.999, 0.001,  3, 0.001,  3., 0.001, 0.001, 2.5, 0.001]
+                                        + [0.1,   0.001, 0.2  ] * 2)
+    cfg.episode_length_s            = 20.0
+    cfg.max_jumps                   = 10.0
+    cfg.env_dt                      = 0.01
+    cfg.motor_strength_ratios       = 1.0
+    cfg.motor_torque_delay_steps    = 5
+    cfg.use_yaw_feedback            = False
+    cfg.foot_friction               = [1.,1.,1.,1.]
+    cfg.base_position_kp            = np.array([0.,0.,0.])
+    cfg.base_position_kd            = np.array([10.,10.,10.])
+    cfg.base_orientation_kp         = np.array([50.,0.,0.])
+    cfg.base_orientation_kd         = np.array([10.,10.,10.])
+    cfg.qp_foot_friction_coef       = 0.6
+    cfg.qp_weight_ddq               = np.diag([1.,1.,10.,10.,10.,1.])
+    cfg.qp_body_inertia             = np.array([0.14,0.35,0.35])*1.5
+    cfg.use_full_qp                 = False
+    cfg.clip_grf_in_sim             = True
+    cfg.swing_foot_height           = 0.0
+    cfg.swing_foot_landing_clearance= 0.0
+    cfg.terminate_on_body_contact   = True
+    cfg.terminate_on_limb_contact   = False
+    cfg.terminate_on_height         = 0.15
+    cfg.use_penetrating_contact     = False
 
 def quaternion_to_euler_array(quat):
     # Ensure quaternion is in the correct format [x, y, z, w]
@@ -130,7 +180,7 @@ class Sim2sim:
                 foot_landing_clearance=self.cfg.swing_foot_landing_clearance)
         
         # L = np.diag([10, 10, 10, 150, 150, 150])
-        L = np.diag([150, 150, 150, 50, 10, 50])
+        L = np.diag([500, 500, 500, 100, 100, 100])
         
         self._torque_optimizer = L1TorqueOptimizer(
                 self._robot,
@@ -148,8 +198,8 @@ class Sim2sim:
                 },
                 l1_kwargs={
                 'observer_gain': L,    # tune for eigenvalues of (−L)
-                'adapt_gain': 3.5,               # Γ
-                'filter_cutoff': 50.0,            # ω_c (Hz)
+                'adapt_gain': 5.0,               # Γ
+                'filter_cutoff': 20.0,            # ω_c (Hz)
                 'dt': self.sim_config.dt
                 }
             )
@@ -390,55 +440,6 @@ if __name__ == '__main__':
                         help='Run to load from.')
     parser.add_argument('--terrain', action='store_true', help='terrain or plane')
     args = parser.parse_args()
-
-    class Sim2simCfg():
-
-        sim_config=ConfigDict() 
-        sim_config.sim_duration = 60.0
-        sim_config.dt = 0.002  
-        sim_config.decimation = 10
-        sim_config.render = True
-        sim_config.action_repeat = 1
-        gait = ConfigDict()
-        gait.stepping_frequency = 1
-        gait.initial_offset = np.array([0., 0., 0., 0.]) * (2 * np.pi)
-        gait.swing_ratio = np.array([0.5, 0.5, 0.5, 0.5])
-        cfg = ConfigDict()
-        cfg.goal_lb = np.array([0.3, 0.])
-        cfg.goal_ub = np.array([1., 0.])
-
-        cfg.include_gait_action = True
-        cfg.include_foot_action = True
-        cfg.mirror_foot_action = True
-
-        cfg.action_lb = np.array([0.5, -0.001, -3, -0.001, -3., -0.001, -0.001, -2.5, -0.001] +
-                                [-0.1, -0.0001, 0.] * 2)
-        cfg.action_ub = np.array([3.999, 0.001, 3, 0.001, 3., 0.001, 0.001, 2.5, 0.001] +
-                               [0.1, 0.001, 0.2] * 2)
-        
-        cfg.episode_length_s = 20.
-        cfg.max_jumps = 10.
-        cfg.env_dt = 0.01
-        cfg.motor_strength_ratios = 1.
-        cfg.motor_torque_delay_steps = 5
-        cfg.use_yaw_feedback = False
-        cfg.foot_friction = [1., 1., 1., 1.]  #0.7
-        cfg.base_position_kp = np.array([0., 0., 0.])
-        cfg.base_position_kd = np.array([10., 10., 10.])
-        cfg.base_orientation_kp = np.array([50., 0., 0.])
-        cfg.base_orientation_kd = np.array([10., 10., 10.])
-        cfg.qp_foot_friction_coef = 0.6
-        cfg.qp_weight_ddq = np.diag([1., 1., 10., 10., 10., 1.])
-        cfg.qp_body_inertia = np.array([0.14, 0.35, 0.35]) * 1.5
-        cfg.use_full_qp = False
-        cfg.clip_grf_in_sim = True
-        cfg.swing_foot_height = 0.
-        cfg.swing_foot_landing_clearance = 0.
-        cfg.terminate_on_body_contact = True
-        cfg.terminate_on_limb_contact = False
-        cfg.terminate_on_height = 0.15
-        cfg.use_penetrating_contact = False
-
 
     policy = torch.jit.load(args.load_model)
     sim2sim = Sim2sim(Sim2simCfg())

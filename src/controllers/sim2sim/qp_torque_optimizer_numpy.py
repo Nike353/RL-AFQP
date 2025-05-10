@@ -403,6 +403,7 @@ class QPTorqueOptimizer:
     self._num_envs = self._robot.num_envs
     self._clip_grf = clip_grf
     self._use_full_qp = use_full_qp
+    self._dt = dt
 
     self._base_orientation_kp = base_orientation_kp
     self._base_orientation_kp = np.stack([self._base_orientation_kp] *
